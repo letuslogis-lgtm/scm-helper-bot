@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+httpx
+python-multipart
+google-generativeai
+supabase
+pillow
