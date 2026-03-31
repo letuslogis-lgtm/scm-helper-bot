@@ -1,0 +1,2466 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SCM 물류 입고 대시보드 - LETUS LOGIS</title>
+
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prop-types/15.8.1/prop-types.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/recharts/2.12.7/Recharts.min.js" crossorigin></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            letusBg: '#f5f7fa',
+            letusSidebar: '#273444',
+            letusBlue: '#4b89ff',
+            letusOrange: '#f58220',
+          },
+          fontFamily: { sans: ['Pretendard', '-apple-system', 'sans-serif'] }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    @import url("https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css");
+
+    body {
+      background-color: #f5f7fa;
+      margin: 0;
+      padding: 0;
+    }
+
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: #cbd5e1;
+      border-radius: 10px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+      background: #94a3b8;
+    }
+
+    .fade-in {
+      animation: fadeIn 0.4s ease-out;
+    }
+
+    .slide-up {
+      animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    @keyframes fadeIn {
+      from {
+        opacity: 0;
+      }
+
+      to {
+        opacity: 1;
+      }
+    }
+
+    @keyframes slideUp {
+      from {
+        transform: translateY(20px);
+        opacity: 0;
+      }
+
+      to {
+        transform: translateY(0);
+        opacity: 1;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel" data-type="module">
+    const { useState, useEffect, useMemo } = React;
+
+    // --- Recharts 컴포넌트 ---
+    const { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } = window.Recharts || {};
+
+    // --- 데이터 연동 관련 ---
+    // (이전 하드코딩된 mockData는 삭제되었습니다. Supabase 비동기 통신으로 데이터가 들어옵니다.)
+    const BRANDS = ['(주)한국물류', '글로벌테크', '퍼시스', '일룸', '스마트패키징', '에이스코리아'];
+
+    // --- 범용 컴포넌트 ---
+    // 로딩 처리용 스켈레톤 애니메이션 컴포넌트
+    const TableSkeleton = ({ colCount = 7 }) => (
+      <tbody className="bg-white">
+        <tr>
+          <td colSpan={colCount} className="py-24 text-center">
+            <div className="flex flex-col items-center justify-center animate-pulse">
+              <svg className="w-8 h-8 text-letusBlue mb-4 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+              <p className="text-gray-500 font-bold text-sm tracking-tight">데이터를 불러오는 중입니다...</p>
+            </div>
+          </td>
+        </tr>
+      </tbody>
+    );
+
+    // --- 유틸/아이콘 ---
+    const CloseIcon = () => (
+      <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+    );
+
+    const CATEGORY_COLORS = { 
+      // 신규 카테고리 (카카오 봇 연동)
+      '파손 및 불량': '#ef4444', 
+      '제품 파손': '#f87171',
+      '박스 훼손': '#fb923c',
+      '박스훼손': '#fb923c',
+      '바코드 불량': '#eab308',
+      '계획 이슈': '#3b82f6',
+      '계획 미생성': '#60a5fa',
+      '계획 부족(실물 과다)': '#818cf8',
+      '계획 과다(실물 부족)': '#c084fc',
+      '기타 특이사항': '#9ca3af',
+      '기타': '#9ca3af',
+      // 레거시
+      '파손': '#ef4444', 
+      '수량부족': '#facc15', 
+      '오입고': '#22c55e', 
+      '품질불량': '#3b82f6' 
+    };
+    const BRAND_COLORS = ['#22c55e', '#14b8a6', '#3b82f6', '#8b5cf6', '#f97316', '#ef4444'];
+
+    // StatusBadge, CategoryBadge
+    const StatusBadge = ({ status, category }) => {
+      let bg = '', text = '', icon = null;
+      if (status === '조치대기') { bg = 'bg-red-50 border-red-200'; text = 'text-red-500'; }
+      if (status === '처리 중') { bg = 'bg-yellow-50 border-yellow-300'; text = 'text-yellow-600'; }
+      if (status === '조치완료') { bg = 'bg-green-50 border-green-200'; text = 'text-green-600'; }
+      if (status === '피드백완료') {
+        bg = 'bg-blue-50 border-blue-200';
+        text = 'text-blue-600';
+        icon = <svg className="w-3 h-3 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" /></svg>;
+      }
+      return (
+        <span className={`inline-flex outline-none items-center px-2 py-1 rounded-full text-xs font-bold border shadow-sm ${bg} ${text} justify-center`}>
+          {icon}
+          {status}
+        </span>
+      );
+    };
+
+    const CategoryBadge = ({ category }) => {
+      const color = CATEGORY_COLORS[category] || '#9ca3af';
+      return (
+        <div className="flex items-center">
+          <span className="w-2 h-2 rounded-full mr-2" style={{ backgroundColor: color }}></span>
+          <span className="text-sm text-gray-700">{category}</span>
+        </div>
+      );
+    }
+
+    const formatDateTime = (isoString) => {
+      if (!isoString) return '-';
+      const date = new Date(isoString);
+      if (isNaN(date.getTime())) return '-';
+      const pad = n => n.toString().padStart(2, '0');
+      return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+    };
+
+    // 🔥 다중 이미지를 위한 갤러리/슬라이더 컴포넌트
+    const ImageSlider = ({ imageUrlString }) => {
+      const urls = imageUrlString ? imageUrlString.split(',').map(s => s.trim()).filter(Boolean) : [];
+      const [currentIndex, setCurrentIndex] = React.useState(0);
+
+      if (urls.length === 0) {
+        return (
+          <div className="w-full h-full min-h-[400px] bg-gray-50 rounded-lg border border-dashed border-gray-300 flex items-center justify-center text-gray-400 text-sm font-medium">
+            첨부된 사진이 없습니다
+          </div>
+        );
+      }
+
+      return (
+        <div className="flex flex-col items-center gap-3 w-full h-full">
+          <div className="relative w-full h-[400px] flex items-center justify-center bg-gray-50 rounded-lg border border-gray-200 overflow-hidden group">
+            <img 
+              src={urls[currentIndex]} 
+              alt={`현장사진 ${currentIndex + 1}`} 
+              className="w-full h-full object-contain transition-opacity duration-300"
+            />
+            
+            {urls.length > 1 && (
+              <div className="absolute top-4 right-4 bg-black/60 text-white text-xs font-bold px-2 py-1 rounded-md backdrop-blur-sm">
+                {currentIndex + 1} / {urls.length}
+              </div>
+            )}
+          </div>
+
+          {/* 인디케이터가 이미지 밖, 아래로 분리됨 */}
+          {urls.length > 1 && (
+            <div className="flex bg-gray-100 px-3 py-1.5 rounded-full gap-2 border border-gray-200 shadow-inner">
+              {urls.map((_, idx) => (
+                <button 
+                  key={idx}
+                  onClick={(e) => { e.preventDefault(); e.stopPropagation(); setCurrentIndex(idx); }}
+                  className={`w-1.5 h-1.5 rounded-full outline-none transition-all ${idx === currentIndex ? 'bg-letusBlue scale-125' : 'bg-gray-300 hover:bg-gray-400'}`}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    };
+
+    const RequestModal = ({ row, onClose, onReload, userProfile }) => {
+      const [text, setText] = useState(row.request_content || '');
+      const [actionText, setActionText] = useState(row?.action_content || '');
+      const [isSaving, setIsSaving] = useState(false);
+
+      const handleAction = async (newStatus) => {
+        setIsSaving(true);
+        try {
+          const nowIso = new Date().toISOString();
+
+          const { error } = await supabase
+            .from('logistics_issues')
+            .update({
+              request_content: text,
+              action_content: actionText,
+              status: newStatus,
+              // 🔥 로그인한 사용자의 이름(name)을 동적으로 꽂아줍니다!
+              final_handler: userProfile?.name || '관리자',
+              resolved_at: nowIso
+            })
+            .eq('id', row.id);
+
+          if (error) throw error;
+
+          await onReload();
+          onClose();
+        } catch (error) {
+          console.error('Update error:', error);
+          alert('상태 업데이트 중 오류가 발생했습니다.');
+        } finally {
+          setIsSaving(false);
+        }
+      };
+
+      return (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-black/40 backdrop-blur-sm transition-opacity" onClick={onClose}></div>
+
+          <div className="bg-white rounded-xl shadow-2xl z-10 w-full max-w-4xl slide-up border border-gray-100 overflow-hidden flex flex-col">
+            <div className="p-4 border-b border-gray-100 bg-gray-50 flex justify-between items-center">
+              <h3 className="font-bold text-gray-900">현장 특이사항 요청 내용 ({row.reception_no})</h3>
+              <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition-colors"><CloseIcon /></button>
+            </div>
+
+            <div className="p-5 bg-white grid grid-cols-1 md:grid-cols-2 gap-6 items-stretch overflow-y-auto max-h-[80vh]">
+
+              <div className="flex flex-col h-full">
+                <h4 className="text-sm font-bold text-gray-700 mb-2">📸 현장 사진</h4>
+                <ImageSlider imageUrlString={row.image_url} />
+              </div>
+
+              <div className="flex flex-col h-full space-y-4">
+
+                <div className="flex-1 flex flex-col">
+                  <h4 className="text-sm font-bold text-gray-700 mb-2">요청 내용</h4>
+                  <textarea
+                    value={text}
+                    onChange={(e) => setText(e.target.value)}
+                    placeholder="특이사항 조치 관련 요청 상세 내용이나 확인된 메모를 자유롭게 입력해 주세요."
+                    /* 🔥 포인트 1: '조치대기'가 아니면 전부 비활성화! */
+                    disabled={userProfile?.role === '사용자' || row.status !== '조치대기'}
+                    className={`flex-1 w-full border border-gray-300 rounded-lg p-3 text-sm text-gray-800 placeholder-gray-400 focus:ring-2 focus:ring-letusBlue focus:border-letusBlue outline-none resize-none transition-shadow ${userProfile?.role === '사용자' || row.status !== '조치대기' ? 'bg-gray-100 text-gray-500 cursor-not-allowed' : ''}`}
+                  ></textarea>
+                </div>
+
+                <div className="flex-1 flex flex-col">
+                  <h4 className="text-sm font-bold text-blue-600 mb-2">🛠️ 조치 내용 (현장 작업자 피드백용)</h4>
+                  <textarea
+                    value={actionText}
+                    onChange={(e) => setActionText(e.target.value)}
+                    placeholder="현장 작업자의 텔레그램으로 전송될 상세 조치 결과를 입력해 주세요."
+                    /* 🔥 포인트 1 동일 적용 */
+                    disabled={userProfile?.role === '사용자' || row.status !== '조치대기'}
+                    className={`flex-1 w-full border border-blue-300 rounded-lg p-3 text-sm text-gray-800 placeholder-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none resize-none transition-shadow ${userProfile?.role === '사용자' || row.status !== '조치대기' ? 'bg-gray-100 text-gray-500 cursor-not-allowed' : 'bg-blue-50'}`}
+                  ></textarea>
+                </div>
+
+              </div>
+            </div>
+
+            {/* 🔥 포인트 2: 하단 버튼 영역 스마트 컨트롤 */}
+            <div className="p-4 border-t border-gray-100 bg-gray-50 flex justify-between items-center gap-2">
+
+              {/* 왼쪽: 상태변경 완료 안내 문구 (조치대기가 아닐 때만 뜸) */}
+              <div>
+                {row.status !== '조치대기' && (
+                  <span className="text-gray-500 font-bold text-sm">✅ 처리가 이관/완료되어 내용을 수정할 수 없습니다.</span>
+                )}
+              </div>
+
+              {/* 오른쪽: 버튼들 */}
+              <div className="flex gap-2">
+                <button onClick={onClose} className="px-5 py-2 border border-gray-300 text-gray-600 text-sm font-bold rounded hover:bg-gray-100 transition-colors shadow-sm bg-white">
+                  {row.status !== '조치대기' ? '닫기' : '취소'}
+                </button>
+
+                {/* 조치대기 일 때만 이관, 조치완료 버튼 노출! */}
+                {row.status === '조치대기' && (
+                  <>
+                    <button
+                      onClick={() => handleAction('처리 중')}
+                      disabled={isSaving || userProfile?.role === '사용자'}
+                      className={`px-6 py-2 text-white text-sm font-bold rounded shadow transition-colors flex items-center gap-2 ${userProfile?.role === '사용자' ? 'bg-gray-300 cursor-not-allowed opacity-60' : 'bg-yellow-500 hover:bg-yellow-600'} ${isSaving ? 'opacity-70 cursor-not-allowed' : ''}`}
+                    >
+                      {isSaving ? '진행 중...' : '이관'}
+                    </button>
+                    <button
+                      onClick={() => handleAction('조치완료')}
+                      disabled={isSaving || userProfile?.role === '사용자'}
+                      className={`px-6 py-2 text-white text-sm font-bold rounded shadow transition-colors flex items-center gap-2 ${userProfile?.role === '사용자' ? 'bg-gray-300 cursor-not-allowed opacity-60' : 'bg-green-500 hover:bg-green-600'
+                        } ${isSaving ? 'opacity-70 cursor-not-allowed' : ''}`}
+                    >
+                      {isSaving ? '진행 중...' : '조치완료'}
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+
+          </div>
+        </div>
+      );
+    };
+
+    const HandleModal = ({ row, onClose, onReload, userProfile }) => {
+      const [text, setText] = useState(row.handleComment || '');
+      const [actionText, setActionText] = useState(row.action_content || '');
+      const [isSaving, setIsSaving] = useState(false);
+
+      const handleAction = async (newStatus) => {
+        setIsSaving(true);
+        try {
+          const nowIso = new Date().toISOString();
+
+          // 💡 1. 처리자 이름 기본값을 '관리자'로 세팅합니다.
+          const { error } = await supabase
+            .from('logistics_issues')
+            .update({
+              request_content: text,
+              action_content: actionText,
+              status: newStatus,
+              final_handler: userProfile?.name || '관리자',
+              resolved_at: nowIso
+            })
+            .eq('id', row.id);
+
+          if (error) throw error;
+
+          await onReload();
+          onClose();
+        } catch (error) {
+          console.error('Update error:', error);
+          alert('상태 업데이트 중 오류가 발생했습니다.');
+        } finally {
+          setIsSaving(false);
+        }
+      };
+
+      return (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-black/40 backdrop-blur-sm transition-opacity" onClick={onClose}></div>
+          <div className="bg-white rounded-xl shadow-2xl z-10 w-full max-w-4xl slide-up border border-gray-100 overflow-hidden flex flex-col">
+            <div className="p-4 border-b border-gray-100 bg-gray-50 flex justify-between items-center">
+              <h3 className="font-bold text-gray-900">현장 특이사항 조치 등록 ({row.reception_no})</h3>
+              <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition-colors"><CloseIcon /></button>
+            </div>
+
+            <div className="p-5 bg-white grid grid-cols-1 md:grid-cols-2 gap-6 items-stretch overflow-y-auto max-h-[80vh]">
+
+              <div className="flex flex-col h-full">
+                <h4 className="text-sm font-bold text-gray-700 mb-2">📸 현장 사진</h4>
+                <ImageSlider imageUrlString={row.image_url} />
+              </div>
+
+              <div className="flex flex-col h-full space-y-4">
+
+                <div className="flex-1 flex flex-col">
+                  <h4 className="text-sm font-bold text-gray-700 mb-2">요청 내용</h4>
+                  <div className="flex-1 w-full border border-gray-200 bg-gray-100 rounded-lg p-3 text-sm text-gray-600 overflow-y-auto">
+                    {row.request_content || '등록된 요청 내용이 없습니다.'}
+                  </div>
+                </div>
+
+                <div className="flex-1 flex flex-col">
+                  <h4 className="text-sm font-bold text-green-600 mb-2">🛠️ 조치 내용</h4>
+                  <textarea
+                    value={text}
+                    onChange={(e) => setText(e.target.value)}
+                    disabled={row.status === '조치완료'}
+                    placeholder="추가 조치된 내용이나 완료 피드백을 상세하게 입력해 주세요."
+                    className={`flex-1 w-full border rounded-lg p-3 text-sm text-gray-800 outline-none resize-none transition-shadow ${row.status === '조치완료' ? 'bg-gray-100 text-gray-500 border-gray-200 cursor-not-allowed' : 'border-gray-300 focus:ring-2 focus:ring-green-500 focus:border-green-500'}`}
+                  ></textarea>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-4 border-t border-gray-100 bg-gray-50 flex justify-between items-center gap-2">
+              <div>
+                {row.status === '조치완료' && (
+                  <span className="text-green-600 font-bold text-sm">✅ 조치가 완료되어 내용을 수정할 수 없습니다.</span>
+                )}
+              </div>
+              <div className="flex gap-2">
+                <button onClick={onClose} className="px-5 py-2 border border-gray-300 text-gray-600 text-sm font-bold rounded hover:bg-gray-100 transition-colors shadow-sm bg-white">
+                  {row.status === '조치완료' ? '닫기' : '취소'}
+                </button>
+                {row.status !== '조치완료' && (
+                  <button
+                    onClick={() => handleAction('조치완료')}
+                    disabled={isSaving}
+                    className={`px-6 py-2 bg-green-500 text-white text-sm font-bold rounded shadow hover:bg-green-600 transition-colors flex items-center gap-2 ${isSaving ? 'opacity-70 cursor-not-allowed' : ''}`}
+                  >
+                    {isSaving ? '진행 중...' : '조치완료'}
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+
+    // --- 담당 업체 검색 모달 (VendorSearchModal) ---
+    // ✅ Supabase `vendors` 테이블과 실시간 연동 (브랜드/업체 분리 완벽 적용)
+
+    const VendorSearchModal = ({ initialVendors, onApplyVendors, initialBrands, onApplyBrands, onClose }) => {
+      const [query, setQuery] = React.useState('');
+      const [vendorList, setVendorList] = React.useState([]);
+      const [isLoading, setIsLoading] = React.useState(true);
+
+      const [checkedVendors, setCheckedVendors] = React.useState(() => {
+        if (!initialVendors) return [];
+        return initialVendors.split(',').map(s => s.trim()).filter(Boolean);
+      });
+
+      const [checkedBrands, setCheckedBrands] = React.useState(() => {
+        if (!initialBrands) return [];
+        return initialBrands.split(',').map(s => s.trim()).filter(Boolean);
+      });
+
+      const brandList = ['퍼시스', '일룸', '시디즈', '슬로우베드', '알로소', '데스커', '바로스'];
+
+      React.useEffect(() => {
+        const fetchVendors = async () => {
+          setIsLoading(true);
+          try {
+            const { data, error } = await supabase
+              .from('vendors')
+              .select('id, vendor_name')
+              .order('vendor_name', { ascending: true });
+            if (error) throw error;
+            setVendorList(data || []);
+          } catch (err) {
+            console.error('vendors fetch error:', err.message);
+          } finally {
+            setIsLoading(false);
+          }
+        };
+        fetchVendors();
+      }, []);
+
+      const filteredVendors = vendorList.filter(v => v.vendor_name.includes(query));
+      const filteredBrands = brandList.filter(b => b.includes(query));
+
+      const toggleVendor = (name) => {
+        setCheckedVendors(prev => prev.includes(name) ? prev.filter(n => n !== name) : [...prev, name]);
+      };
+
+      const toggleBrand = (name) => {
+        setCheckedBrands(prev => prev.includes(name) ? prev.filter(n => n !== name) : [...prev, name]);
+      };
+
+      const handleApply = () => {
+        onApplyVendors(checkedVendors.join(','));
+        onApplyBrands(checkedBrands.join(','));
+        onClose();
+      };
+
+      return (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[200] backdrop-blur-sm p-4 animate-fade-in">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm overflow-hidden flex flex-col slide-up h-[600px]" style={{ maxHeight: '80vh' }}>
+            {/* 헤더 */}
+            <div className="flex justify-between items-center px-5 py-4 border-b border-gray-100">
+              <h4 className="text-sm font-bold text-gray-800 flex items-center">
+                <span className="w-1.5 h-3.5 bg-letusBlue rounded-full mr-2"></span>
+                담당 업체 및 브랜드 검색
+              </h4>
+              <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1">
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" /></svg>
+              </button>
+            </div>
+
+            {/* 검색창 */}
+            <div className="px-4 py-3 border-b border-gray-100 bg-slate-50">
+              <div className="relative">
+                <svg className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+                <input
+                  type="text"
+                  value={query}
+                  onChange={e => setQuery(e.target.value)}
+                  placeholder="브랜드명 또는 업체명 검색..."
+                  className="w-full pl-9 pr-3 py-2 text-xs border border-gray-200 rounded-[4px] focus:outline-none focus:border-letusBlue bg-white"
+                  autoFocus
+                />
+              </div>
+              {(checkedVendors.length > 0 || checkedBrands.length > 0) && (
+                <p className="text-[10px] text-letusBlue font-bold mt-2">
+                  브랜드 {checkedBrands.length}개, 업체 {checkedVendors.length}개 선택됨
+                </p>
+              )}
+            </div>
+
+            {/* 브랜드 및 업체 리스트 */}
+            <div className="overflow-y-auto flex-1">
+              {isLoading ? (
+                <div className="py-10 text-center text-xs text-gray-400 flex flex-col items-center gap-2">
+                  <svg className="animate-spin w-5 h-5 text-letusBlue" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                  목록 로딩 중...
+                </div>
+              ) : (
+                <div className="divide-y divide-gray-100">
+                  {filteredBrands.length > 0 && (
+                    <div className="bg-white">
+                      <div className="px-5 py-2 bg-slate-50 text-[10px] font-bold text-slate-400">관리 브랜드</div>
+                      {filteredBrands.map(b => (
+                        <div key={b} className={`flex items-center gap-3 px-5 py-2.5 cursor-pointer transition-colors ${checkedBrands.includes(b) ? 'bg-orange-50' : 'hover:bg-gray-50'}`} onClick={() => toggleBrand(b)}>
+                          <input type="checkbox" readOnly checked={checkedBrands.includes(b)} className="w-3.5 h-3.5 accent-letusOrange cursor-pointer" />
+                          <span className="text-xs font-bold text-gray-700">{b}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {filteredVendors.length > 0 && (
+                    <div className="bg-white">
+                      <div className="px-5 py-2 bg-slate-50 text-[10px] font-bold text-slate-400">담당 업체</div>
+                      {filteredVendors.map(v => (
+                        <div key={v.id} className={`flex items-center gap-3 px-5 py-2.5 cursor-pointer transition-colors ${checkedVendors.includes(v.vendor_name) ? 'bg-blue-50' : 'hover:bg-gray-50'}`} onClick={() => toggleVendor(v.vendor_name)}>
+                          <input type="checkbox" readOnly checked={checkedVendors.includes(v.vendor_name)} className="w-3.5 h-3.5 accent-letusBlue cursor-pointer" />
+                          <span className="text-xs font-bold text-gray-700">{v.vendor_name}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {filteredBrands.length === 0 && filteredVendors.length === 0 && (
+                    <div className="py-10 text-center text-xs text-gray-400">검색 결과가 없습니다.</div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* 하단 버튼 */}
+            <div className="px-4 py-3 border-t border-gray-100 bg-white flex justify-end gap-2 shrink-0">
+              <button onClick={onClose} className="px-4 py-2 border border-gray-200 text-gray-500 text-[11px] font-bold rounded-[3px] hover:bg-gray-50">취소</button>
+              <button
+                onClick={handleApply}
+                className="px-5 py-2 bg-letusBlue text-white text-[11px] font-bold rounded-[3px] hover:bg-blue-600 transition-colors"
+              >
+                적용하기 {(checkedVendors.length > 0 || checkedBrands.length > 0) && `(${checkedVendors.length + checkedBrands.length})`}
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    // --- 사용자 등록 모달 (UserAddModal) ---
+    const UserAddModal = ({ onClose, onReload }) => {
+      const [name, setName] = useState('');
+      const [loginId, setLoginId] = useState('');
+      const [password, setPassword] = useState('');
+      const [group, setGroup] = useState('관리자');
+      const [status, setStatus] = useState('정상');
+      const [brand, setBrand] = useState('퍼시스');
+      const [team, setTeam] = useState('');
+      const [managedVendors, setManagedVendors] = useState('');
+      const [managedBrands, setManagedBrands] = useState('');
+      const [vendorModalOpen, setVendorModalOpen] = useState(false);
+      const [isSaving, setIsSaving] = useState(false);
+      const [errorMsg, setErrorMsg] = useState('');
+
+      const handleSave = async (e) => {
+        e.preventDefault();
+        setErrorMsg('');
+
+        // 1. 유효성 검사
+        if (!name || !loginId || !password) {
+          setErrorMsg('이름, 아이디, 비밀번호를 모두 입력해 주세요.');
+          return;
+        }
+        if (password.length < 6) {
+          setErrorMsg('비밀번호는 최소 6자리 이상이어야 합니다.');
+          return;
+        }
+
+        setIsSaving(true);
+        try {
+          const targetEmail = loginId.includes('@') ? loginId : `${loginId}@letus.com`;
+
+          // 2. Auth 생성 (adminSupabase 사용으로 세션 탈취 우회)
+          const { data: authData, error: authError } = await adminSupabase.auth.admin.createUser({
+            email: targetEmail,
+            password: password,
+            email_confirm: true,
+          });
+
+          if (authError) throw authError;
+
+          const newUserId = authData.user.id;
+
+          // 3. Profiles 테이블에 폼 데이터 동기화 (Two-Step Insert)
+          const { error: profileError } = await adminSupabase.from('profiles').insert([
+            {
+              id: newUserId,
+              name: name,
+              login_id: loginId,
+              role: group,
+              status: status,
+              brands: brand, // text 컬럼이므로 순수 문자열 그대로 전송
+              team: team,
+              managed_vendors: managedVendors,
+              managed_brands: managedBrands,
+              managed_brands: managedBrands,
+              created_at: new Date().toISOString()
+            }
+          ]);
+
+          if (profileError) throw profileError;
+
+          // 4. 모달 종료 및 성공 렌더링
+          alert('신규 사용자가 성공적으로 등록되었습니다.');
+          onReload(); // 리스트 즉시 리페치
+          onClose();
+        } catch (error) {
+          console.error("User Creation Error:", error);
+          setErrorMsg(`등록 실패: ${error.message}`);
+        } finally {
+          setIsSaving(false);
+        }
+      };
+
+      return (
+        <>
+          <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-[100] backdrop-blur-sm p-4 animate-fade-in">
+            <div className="bg-white rounded-xl shadow-2xl w-full max-w-[480px] overflow-hidden flex flex-col slide-up">
+              <div className="flex justify-between items-center p-5 border-b border-gray-100 bg-white">
+                <h3 className="text-sm font-bold text-gray-800 flex items-center">
+                  <span className="w-1.5 h-3.5 bg-letusOrange rounded-full mr-2"></span>사용자 추가
+                </h3>
+                <button type="button" onClick={onClose} className="text-gray-400 hover:text-gray-600 transition-colors p-1">
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" /></svg>
+                </button>
+              </div>
+
+              <div className="p-6 bg-slate-50 flex-1">
+                <form id="addForm" onSubmit={handleSave} className="space-y-4">
+                  {errorMsg && (
+                    <div className="bg-red-50 text-red-600 text-xs font-bold p-3 rounded border border-red-100 flex items-center gap-1.5">
+                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+                      {errorMsg}
+                    </div>
+                  )}
+
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs font-bold text-gray-700">이름 <span className="text-red-500">*</span></label>
+                    <input type="text" value={name} onChange={(e) => setName(e.target.value)} required className="border border-gray-300 rounded-[4px] px-3.5 py-2 text-xs focus:outline-none focus:border-letusBlue transition-all bg-white" placeholder="사용자 이름" />
+                  </div>
+
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs font-bold text-gray-700">아이디 (ID) <span className="text-red-500">*</span></label>
+                    <div className="flex items-center border border-gray-300 rounded-[4px] overflow-hidden focus-within:border-letusBlue bg-white transition-all">
+                      <input type="text" value={loginId} onChange={(e) => setLoginId(e.target.value)} required className="flex-1 px-3.5 py-2 text-xs focus:outline-none placeholder-slate-400" placeholder="admin" />
+                      <span className="bg-slate-50 px-3 py-2 text-xs text-slate-500 font-bold border-l border-gray-200 shrink-0">@letus.com</span>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs font-bold text-gray-700">비밀번호 <span className="text-red-500">*</span></label>
+                    <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={6} className="border border-gray-300 rounded-[4px] px-3.5 py-2 text-xs focus:outline-none focus:border-letusBlue transition-all bg-white" placeholder="최소 6자리 이상" />
+                  </div>
+
+                  {/* 2단 그리드 (1) - 부서 및 브랜드 */}
+                  <div className="grid grid-cols-2 gap-4 pt-1">
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-[11px] font-bold text-gray-700">소속 팀 <span className="text-red-500">*</span></label>
+                      <input type="text" value={team} onChange={(e) => setTeam(e.target.value)} required className="border border-gray-300 rounded-[4px] px-3.5 py-2 text-[11px] focus:outline-none focus:border-letusBlue transition-all bg-white text-gray-800" placeholder="소속 팀 입력" />
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-[11px] font-bold text-gray-700">소속 브랜드 <span className="text-red-500">*</span></label>
+                      <select value={brand} onChange={(e) => setBrand(e.target.value)} className="border border-gray-300 rounded-[4px] px-3.5 py-2 text-[11px] focus:outline-none focus:border-letusBlue transition-all bg-white text-gray-800 font-medium cursor-pointer">
+                        <option value="전체">전체 (All)</option>
+                        <option value="퍼시스">퍼시스</option>
+                        <option value="일룸">일룸</option>
+                        <option value="슬로우베드">슬로우베드</option>
+                        <option value="데스커">데스커</option>
+                        <option value="시디즈">시디즈</option>
+                        <option value="알로소">알로소</option>
+                        <option value="바로스">바로스</option>
+                      </select>
+                    </div>
+                  </div>
+
+
+                  {/* 담당 업체 선택 */}
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-[11px] font-bold text-gray-700">담당 브랜드 및 업체 관리</label>
+                    <div className="min-h-[60px] border border-gray-300 rounded-[4px] bg-white px-2.5 py-2 flex flex-col gap-2">
+                      {/* 브랜드 표시 */}
+                      <div className="flex flex-wrap gap-1.5 items-center">
+                        <span className="text-[9px] font-black text-orange-400 bg-orange-50 px-1 rounded">BRAND</span>
+                        {managedBrands ? managedBrands.split(',').filter(Boolean).map((b, i) => (
+                          <span key={i} className="bg-orange-50 text-letusOrange border border-orange-200 text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1">
+                            {b.trim()}
+                          </span>
+                        )) : <span className="text-gray-300 text-[10px]">미설정</span>}
+                      </div>
+                      {/* 업체 표시 */}
+                      <div className="flex flex-wrap gap-1.5 items-center">
+                        <span className="text-[9px] font-black text-blue-400 bg-blue-50 px-1 rounded">VENDOR</span>
+                        {managedVendors ? managedVendors.split(',').filter(Boolean).map((v, i) => (
+                          <span key={i} className="bg-blue-50 text-blue-600 border border-blue-200 text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1">
+                            {v.trim()}
+                          </span>
+                        )) : <span className="text-gray-300 text-[10px]">미설정</span>}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setVendorModalOpen(true)}
+                      className="flex items-center gap-1.5 text-[11px] font-bold text-letusBlue border border-letusBlue/40 bg-blue-50 hover:bg-blue-100 rounded-[4px] px-3 py-1.5 transition-colors w-fit"
+                    >
+                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+                      업체 검색 및 추가
+                    </button>
+                  </div>
+
+                  {/* 2단 그리드 (2) - 계정 권한 및 상태 */}
+                  <div className="grid grid-cols-2 gap-4 pb-1">
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-[11px] font-bold text-gray-700">권한 그룹</label>
+                      <select value={group} onChange={(e) => setGroup(e.target.value)} className="border border-gray-300 rounded-[4px] px-3.5 py-2 text-[11px] focus:outline-none focus:border-letusBlue transition-all bg-white text-gray-800 font-medium cursor-pointer">
+                        <option value="관리자">관리자</option>
+                        <option value="사용자">사용자</option>
+                      </select>
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-[11px] font-bold text-gray-700">계정 상태</label>
+                      <select value={status} onChange={(e) => setStatus(e.target.value)} className="border border-gray-300 rounded-[4px] px-3.5 py-2 text-[11px] focus:outline-none focus:border-letusBlue transition-all bg-white text-gray-800 font-medium cursor-pointer">
+                        <option value="정상">정상 승인</option>
+                        <option value="정지">이용 정지</option>
+                      </select>
+                    </div>
+                  </div>
+                </form>
+              </div>
+
+              <div className="p-4 border-t border-gray-200 bg-white flex justify-end gap-2 shrink-0">
+                <button type="button" onClick={onClose} className="px-5 py-[9px] border border-gray-300 text-gray-600 text-[11px] font-bold rounded-[3px] hover:bg-gray-50 transition-colors">취소</button>
+                <button onClick={handleSave} disabled={isSaving} className={`px-5 py-[9px] bg-letusBlue text-white text-[11px] font-bold rounded-[3px] hover:bg-blue-600 transition-colors flex items-center gap-1.5 ${isSaving ? 'opacity-70 cursor-not-allowed' : ''}`}>
+                  {isSaving ? (
+                    <svg className="animate-spin h-3.5 w-3.5 text-white" xmlns="http://www.w0.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                  ) : null}
+                  {isSaving ? '생성 중...' : '등록하기'}
+                </button>
+              </div>
+            </div>
+          </div>
+          {vendorModalOpen && (
+            <VendorSearchModal
+              initialVendors={managedVendors}
+              onApplyVendors={setManagedVendors}
+              initialBrands={managedBrands}
+              onApplyBrands={setManagedBrands}
+              onClose={() => setVendorModalOpen(false)}
+            />
+          )}
+        </>
+      );
+    };
+
+    // --- 사용자 수정 모달 (UserEditModal) ---
+    const UserEditModal = ({ user, onClose, onReload }) => {
+      const [name, setName] = useState(user.name || '');
+      const [loginId, setLoginId] = useState(user.login_id || '');
+      const [password, setPassword] = useState('');
+      const [group, setGroup] = useState(user.role || '사용자');
+      const [status, setStatus] = useState(user.status || '정상');
+      const [brand, setBrand] = useState(user.brands || '퍼시스'); // text 타입: 그대로 사용
+      const [team, setTeam] = useState(user.team || '');
+      const [managedVendors, setManagedVendors] = useState(user.managed_vendors || '');
+      const [managedBrands, setManagedBrands] = useState(user.managed_brands || '');
+
+      // 모달이 열리거나 선택된 유저가 바뀔 때마다 상태를 강제로 동기화
+      React.useEffect(() => {
+        if (user) {
+          setManagedVendors(user.managed_vendors || '');
+          setManagedBrands(user.managed_brands || '');
+        }
+      }, [user]);
+      const [vendorModalOpen, setVendorModalOpen] = useState(false);
+      const [isSaving, setIsSaving] = useState(false);
+      const [errorMsg, setErrorMsg] = useState('');
+
+      const handleSave = async (e) => {
+        e.preventDefault();
+        setErrorMsg('');
+
+        if (!name || !loginId) {
+          setErrorMsg('이름과 아이디는 필수 입력 항목입니다.');
+          return;
+        }
+        if (password && password.length < 6) {
+          setErrorMsg('비밀번호는 최소 6자리 이상이어야 합니다.');
+          return;
+        }
+
+        setIsSaving(true);
+        try {
+          // 1. profiles 테이블 UPDATE
+          const { error: profileError } = await adminSupabase.from('profiles').update({
+            name,
+            login_id: loginId,
+            role: group,
+            status,
+            brands: brand, // text 컬럼이므로 순수 문자열 그대로 전송
+            team,
+            managed_vendors: managedVendors,
+            managed_brands: managedBrands,
+            managed_brands: managedBrands,
+          }).eq('id', user.id);
+          if (profileError) throw profileError;
+
+          // 2. 비밀번호가 입력됐을 때만 Auth 비밀번호도 변경
+          if (password) {
+            const { error: pwError } = await adminSupabase.auth.admin.updateUserById(user.id, { password });
+            if (pwError) throw pwError;
+          }
+
+          alert('사용자 정보가 수정되었습니다.');
+          onReload();
+          onClose();
+        } catch (error) {
+          console.error('User Update Error:', error);
+          setErrorMsg(`수정 실패: ${error.message}`);
+        } finally {
+          setIsSaving(false);
+        }
+      };
+
+      return (
+        <>
+          <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-[100] backdrop-blur-sm p-4 animate-fade-in">
+            <div className="bg-white rounded-xl shadow-2xl w-full max-w-[480px] overflow-hidden flex flex-col slide-up">
+              <div className="flex justify-between items-center p-5 border-b border-gray-100 bg-white">
+                <h3 className="text-sm font-bold text-gray-800 flex items-center">
+                  <span className="w-1.5 h-3.5 bg-letusBlue rounded-full mr-2"></span>사용자 정보 수정
+                </h3>
+                <button type="button" onClick={onClose} className="text-gray-400 hover:text-gray-600 transition-colors p-1">
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" /></svg>
+                </button>
+              </div>
+
+              <div className="p-6 bg-slate-50 flex-1">
+                <form id="editForm" onSubmit={handleSave} className="space-y-4">
+                  {errorMsg && (
+                    <div className="bg-red-50 text-red-600 text-xs font-bold p-3 rounded border border-red-100 flex items-center gap-1.5">
+                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+                      {errorMsg}
+                    </div>
+                  )}
+
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs font-bold text-gray-700">이름 <span className="text-red-500">*</span></label>
+                    <input type="text" value={name} onChange={(e) => setName(e.target.value)} required className="border border-gray-300 rounded-[4px] px-3.5 py-2 text-xs focus:outline-none focus:border-letusBlue transition-all bg-white" placeholder="사용자 이름" />
+                  </div>
+
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs font-bold text-gray-700">아이디 (ID) <span className="text-red-500">*</span></label>
+                    <div className="flex items-center border border-gray-300 rounded-[4px] overflow-hidden focus-within:border-letusBlue bg-white transition-all">
+                      <input type="text" value={loginId} onChange={(e) => setLoginId(e.target.value)} required className="flex-1 px-3.5 py-2 text-xs focus:outline-none placeholder-slate-400" />
+                      <span className="bg-slate-50 px-3 py-2 text-xs text-slate-500 font-bold border-l border-gray-200 shrink-0">@letus.com</span>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs font-bold text-gray-700">새 비밀번호 <span className="text-slate-400 font-normal">(변경 시에만 입력)</span></label>
+                    <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} minLength={6} className="border border-gray-300 rounded-[4px] px-3.5 py-2 text-xs focus:outline-none focus:border-letusBlue transition-all bg-white" placeholder="변경하지 않으려면 비워두세요" />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4 pt-1">
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-[11px] font-bold text-gray-700">소속 팀 <span className="text-red-500">*</span></label>
+                      <input type="text" value={team} onChange={(e) => setTeam(e.target.value)} required className="border border-gray-300 rounded-[4px] px-3.5 py-2 text-[11px] focus:outline-none focus:border-letusBlue transition-all bg-white text-gray-800" placeholder="소속 팀 입력" />
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-[11px] font-bold text-gray-700">소속 브랜드 <span className="text-red-500">*</span></label>
+                      <select value={brand} onChange={(e) => setBrand(e.target.value)} className="border border-gray-300 rounded-[4px] px-3.5 py-2 text-[11px] focus:outline-none focus:border-letusBlue transition-all bg-white text-gray-800 font-medium cursor-pointer">
+                        <option value="전체">전체 (All)</option>
+                        <option value="퍼시스">퍼시스</option>
+                        <option value="일룸">일룸</option>
+                        <option value="슬로우베드">슬로우베드</option>
+                        <option value="데스커">데스커</option>
+                        <option value="시디즈">시디즈</option>
+                        <option value="알로소">알로소</option>
+                        <option value="바로스">바로스</option>
+                      </select>
+                    </div>
+                  </div>
+
+
+                  {/* 담당 업체 선택 */}
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-[11px] font-bold text-gray-700">담당 브랜드 및 업체 관리</label>
+                    <div className="min-h-[60px] border border-gray-300 rounded-[4px] bg-white px-2.5 py-2 flex flex-col gap-2">
+                      {/* 브랜드 표시 */}
+                      <div className="flex flex-wrap gap-1.5 items-center">
+                        <span className="text-[9px] font-black text-orange-400 bg-orange-50 px-1 rounded">BRAND</span>
+                        {managedBrands ? managedBrands.split(',').filter(Boolean).map((b, i) => (
+                          <span key={i} className="bg-orange-50 text-letusOrange border border-orange-200 text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1">
+                            {b.trim()}
+                          </span>
+                        )) : <span className="text-gray-300 text-[10px]">미설정</span>}
+                      </div>
+                      {/* 업체 표시 */}
+                      <div className="flex flex-wrap gap-1.5 items-center">
+                        <span className="text-[9px] font-black text-blue-400 bg-blue-50 px-1 rounded">VENDOR</span>
+                        {managedVendors ? managedVendors.split(',').filter(Boolean).map((v, i) => (
+                          <span key={i} className="bg-blue-50 text-blue-600 border border-blue-200 text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1">
+                            {v.trim()}
+                          </span>
+                        )) : <span className="text-gray-300 text-[10px]">미설정</span>}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setVendorModalOpen(true)}
+                      className="flex items-center gap-1.5 text-[11px] font-bold text-letusBlue border border-letusBlue/40 bg-blue-50 hover:bg-blue-100 rounded-[4px] px-3 py-1.5 transition-colors w-fit"
+                    >
+                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+                      업체 검색 및 추가
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4 pb-1">
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-[11px] font-bold text-gray-700">권한 그룹</label>
+                      <select value={group} onChange={(e) => setGroup(e.target.value)} className="border border-gray-300 rounded-[4px] px-3.5 py-2 text-[11px] focus:outline-none focus:border-letusBlue transition-all bg-white text-gray-800 font-medium cursor-pointer">
+                        <option value="관리자">관리자</option>
+                        <option value="사용자">사용자</option>
+                      </select>
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-[11px] font-bold text-gray-700">계정 상태</label>
+                      <select value={status} onChange={(e) => setStatus(e.target.value)} className="border border-gray-300 rounded-[4px] px-3.5 py-2 text-[11px] focus:outline-none focus:border-letusBlue transition-all bg-white text-gray-800 font-medium cursor-pointer">
+                        <option value="정상">정상 승인</option>
+                        <option value="정지">이용 정지</option>
+                      </select>
+                    </div>
+                  </div>
+                </form>
+              </div>
+
+              <div className="p-4 border-t border-gray-200 bg-white flex justify-end gap-2 shrink-0">
+                <button type="button" onClick={onClose} className="px-5 py-[9px] border border-gray-300 text-gray-600 text-[11px] font-bold rounded-[3px] hover:bg-gray-50 transition-colors">취소</button>
+                <button onClick={handleSave} disabled={isSaving} className={`px-5 py-[9px] bg-letusBlue text-white text-[11px] font-bold rounded-[3px] hover:bg-blue-600 transition-colors flex items-center gap-1.5 ${isSaving ? 'opacity-70 cursor-not-allowed' : ''}`}>
+                  {isSaving ? (
+                    <svg className="animate-spin h-3.5 w-3.5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                  ) : null}
+                  {isSaving ? '수정 중...' : '수정하기'}
+                </button>
+              </div>
+            </div>
+          </div>
+          {vendorModalOpen && (
+            <VendorSearchModal initialVendors={managedVendors} onApplyVendors={setManagedVendors} initialBrands={managedBrands} onApplyBrands={setManagedBrands} onClose={() => setVendorModalOpen(false)} />
+          )}
+        </>
+      );
+    };
+
+
+    // --- 담당 브랜드 및 업체 조회 팝업 (VendorListModal) - 읽기 전용 ─────
+    const VendorListModal = ({ user, onClose }) => {
+      // 💡 어떤 형태의 데이터가 들어와도 절대 크래시가 나지 않도록 안전하게 파싱합니다.
+      const bRaw = user?.managed_brands || '';
+      const vRaw = user?.managed_vendors || '';
+      const brandList = typeof bRaw === 'string' ? bRaw.split(',').map(v => v.trim()).filter(Boolean) : [];
+      const vendorList = typeof vRaw === 'string' ? vRaw.split(',').map(v => v.trim()).filter(Boolean) : [];
+
+      const totalCount = brandList.length + vendorList.length;
+
+      return (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[200] backdrop-blur-sm p-4 animate-fade-in">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-xs overflow-hidden flex flex-col slide-up h-[500px]" style={{ maxHeight: '70vh' }}>
+            <div className="flex justify-between items-center px-5 py-4 border-b border-gray-100 shrink-0">
+              <h4 className="text-sm font-bold text-gray-800 flex items-center">
+                <span className="w-1.5 h-3.5 bg-letusBlue rounded-full mr-2"></span>
+                담당 브랜드 및 업체
+                <span className="ml-2 text-xs text-letusBlue font-bold bg-blue-50 border border-blue-200 rounded-full px-2 py-0.5">{totalCount}개</span>
+              </h4>
+              <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1">
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" /></svg>
+              </button>
+            </div>
+
+            <div className="overflow-y-auto flex-1 divide-y divide-gray-50">
+              {brandList.length > 0 && (
+                <div>
+                  <div className="px-5 py-2 bg-orange-50/50 text-[10px] font-bold text-orange-400">관리 브랜드</div>
+                  {brandList.map((b, i) => (
+                    <div key={i} className="flex items-center gap-3 px-5 py-2.5">
+                      <span className="w-4 h-4 rounded-full bg-orange-100 text-letusOrange text-[9px] font-black flex items-center justify-center shrink-0">{i + 1}</span>
+                      <span className="text-xs font-bold text-gray-700">{b}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {vendorList.length > 0 && (
+                <div>
+                  <div className="px-5 py-2 bg-blue-50/50 text-[10px] font-bold text-letusBlue">담당 업체</div>
+                  {vendorList.map((v, i) => (
+                    <div key={i} className="flex items-center gap-3 px-5 py-2.5">
+                      <span className="w-4 h-4 rounded-full bg-blue-100 text-letusBlue text-[9px] font-black flex items-center justify-center shrink-0">{i + 1}</span>
+                      <span className="text-xs font-bold text-gray-700">{v}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {totalCount === 0 && (
+                <div className="py-16 text-center text-xs text-gray-400 font-bold">등록된 정보가 없습니다.</div>
+              )}
+            </div>
+
+            <div className="px-4 py-3 border-t border-gray-100 bg-gray-50 flex justify-end shrink-0">
+              <button onClick={onClose} className="px-5 py-2 bg-slate-700 text-white text-[11px] font-bold rounded-[3px] hover:bg-slate-800 transition-colors">닫기</button>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    const UserManagement = () => {
+      const [isModalOpen, setIsModalOpen] = useState(false);
+      const [users, setUsers] = useState([]);
+      const [isLoading, setIsLoading] = useState(false);
+      const [selectedUsers, setSelectedUsers] = useState([]);
+      const [editTarget, setEditTarget] = useState(null);
+      const [vendorListTarget, setVendorListTarget] = useState(null);
+      const [filterRole, setFilterRole] = useState('');
+      const [filterStatus, setFilterStatus] = useState('');
+      const [filterKeyword, setFilterKeyword] = useState('');
+      const [filterVendor, setFilterVendor] = useState('');
+
+      const isAllSelected = users.length > 0 && selectedUsers.length === users.length;
+
+      const toggleAll = () => {
+        if (isAllSelected) {
+          setSelectedUsers([]);
+        } else {
+          setSelectedUsers(users.map(u => u.id));
+        }
+      };
+
+      const toggleOne = (id) => {
+        setSelectedUsers(prev =>
+          prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+        );
+      };
+
+      const handleDeleteSelected = async () => {
+        if (selectedUsers.length === 0) return;
+        if (!window.confirm(`선택한 ${selectedUsers.length}명의 계정을 삭제하시겠습니까?\n이 작업은 되돌릴 수 없습니다.`)) return;
+        try {
+          const { error } = await adminSupabase.from('profiles').delete().in('id', selectedUsers);
+          if (error) throw error;
+          setSelectedUsers([]);
+          await fetchUsers();
+        } catch (e) {
+          alert('삭제 중 오류: ' + e.message);
+        }
+      };
+
+      const fetchUsers = async (params = {}) => {
+        setIsLoading(true);
+        try {
+          let query = supabase.from('profiles').select('*');
+          const role = params.role !== undefined ? params.role : filterRole;
+          const status = params.status !== undefined ? params.status : filterStatus;
+          const keyword = params.keyword !== undefined ? params.keyword : filterKeyword;
+          const vendor = params.vendor !== undefined ? params.vendor : filterVendor;
+          if (role) query = query.eq('role', role);
+          if (status) query = query.eq('status', status);
+          if (keyword) query = query.ilike('name', `%${keyword}%`);
+          if (vendor) query = query.ilike('managed_vendors', `%${vendor}%`);
+          const { data, error } = await query.order('created_at', { ascending: false });
+          if (error) throw error;
+          setUsers(data || []);
+        } catch (error) {
+          console.error("fetchUsers error:", error.message);
+        } finally {
+          setIsLoading(false);
+        }
+      };
+
+      const handleSearch = () => fetchUsers();
+
+      useEffect(() => {
+        window.addEventListener('trigger-refresh', handleSearch);
+        return () => window.removeEventListener('trigger-refresh', handleSearch);
+      }, [filterRole, filterStatus, filterKeyword, filterVendor]);
+
+      useEffect(() => {
+        fetchUsers();
+      }, []);
+
+      // 뼈대 UI
+      return (
+        <div className="p-6 flex flex-col gap-4 max-w-[1600px] mx-auto animate-fade-in pb-20 w-full min-h-[calc(100vh-64px)]">
+          {/* 상단 검색/필터 박스 */}
+          <div className="w-full bg-white rounded-lg shadow-sm border border-slate-200 px-6 py-3 flex items-center z-30 shrink-0">
+            <div className="flex items-center gap-5 w-full flex-wrap">
+
+              {/* 1. 권한 그룹 */}
+              <div className="flex items-center shrink-0">
+                <label className="text-[11px] font-bold text-gray-600 mr-2 whitespace-nowrap">권한 그룹</label>
+                <select value={filterRole} onChange={e => setFilterRole(e.target.value)} className="border border-gray-200 rounded-[3px] text-xs px-2.5 h-[30px] focus:outline-none focus:border-letusOrange w-24 cursor-pointer text-gray-700">
+                  <option value="">전체</option>
+                  <option value="관리자">관리자</option>
+                  <option value="사용자">사용자</option>
+                </select>
+              </div>
+
+              {/* 2. 계정 상태 */}
+              <div className="flex items-center shrink-0">
+                <label className="text-[11px] font-bold text-gray-600 mr-2 whitespace-nowrap">계정 상태</label>
+                <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} className="border border-gray-200 rounded-[3px] text-xs px-2.5 h-[30px] focus:outline-none focus:border-letusOrange w-24 cursor-pointer text-gray-700">
+                  <option value="">전체</option>
+                  <option value="정상">정상 승인</option>
+                  <option value="정지">이용 정지</option>
+                </select>
+              </div>
+
+              {/* 3. 이름 검색어 */}
+              <div className="flex items-center shrink-0">
+                <label className="text-[11px] font-bold text-gray-600 mr-2 whitespace-nowrap">이름</label>
+                <input
+                  type="text"
+                  value={filterKeyword}
+                  onChange={e => setFilterKeyword(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleSearch()}
+                  placeholder="이름 검색..."
+                  className="border border-gray-200 rounded-[3px] text-xs px-2.5 h-[30px] focus:outline-none focus:border-letusOrange w-32 text-gray-700"
+                />
+              </div>
+
+              {/* 4. 담당 업체 검색 */}
+              <div className="flex items-center shrink-0">
+                <label className="text-[11px] font-bold text-gray-600 mr-2 whitespace-nowrap">담당 업체</label>
+                <input
+                  type="text"
+                  value={filterVendor}
+                  onChange={e => setFilterVendor(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleSearch()}
+                  placeholder="업체명 검색..."
+                  className="border border-gray-200 rounded-[3px] text-xs px-2.5 h-[30px] focus:outline-none focus:border-letusOrange w-32 text-gray-700"
+                />
+              </div>
+
+              {/* 조회 버튼 */}
+              <div className="ml-auto shrink-0 flex items-center gap-2">
+                <button
+                  onClick={() => { setFilterRole(''); setFilterStatus(''); setFilterKeyword(''); setFilterVendor(''); fetchUsers({ role: '', status: '', keyword: '', vendor: '' }); }}
+                  className="border border-gray-300 text-gray-500 hover:bg-gray-50 font-bold px-4 h-[30px] rounded-[3px] transition-colors text-xs"
+                >
+                  초기화
+                </button>
+                <button onClick={handleSearch} className="border border-letusOrange text-letusOrange hover:bg-orange-50 font-bold px-6 h-[30px] rounded-[3px] transition-colors text-xs flex items-center justify-center">
+                  조회하기
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* 중간: 데이터 바깥 외부 툴바 영역 (하얀 박스 외부 우측 상단 액션바) */}
+          <div className="flex justify-end w-full px-2 z-30 -mt-1 mb-1">
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-1.5 border-r border-slate-300 pr-3">
+                <button className="p-1.5 text-green-700 hover:bg-white rounded transition-colors shadow-sm bg-slate-50 border border-slate-200 hover:border-green-300" title="엑셀 다운로드">
+                  <svg className="w-[18px] h-[18px]" fill="currentColor" viewBox="0 0 24 24"><path d="M21.17 3.25q.33 0 .59.25q.24.26.24.59v15.82q0 .33-.24.59q-.26.25-.59.25H2.83q-.33 0-.59-.25q-.24-.26-.24-.59V4.09q0-.33.24-.59q.26-.25.59-.25h18.34zm-8.25 10.9l3.52 4.67h2.7l-4.9-6.07 4.65-5.94h-2.65l-3.23 4.48-3.32-4.48H7.07l4.76 5.94-5 6.07h2.72l3.37-4.67z" /></svg>
+                </button>
+                <button
+                  onClick={handleDeleteSelected}
+                  title="선택 삭제"
+                  className={`p-1.5 rounded transition-colors shadow-sm border flex items-center
+                    ${selectedUsers.length > 0
+                      ? 'bg-red-50 border-red-300 text-red-600 hover:bg-red-100'
+                      : 'bg-slate-50 border-slate-200 text-slate-400 cursor-not-allowed'}`}
+                >
+                  <svg className="w-[16px] h-[16px]" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                  {selectedUsers.length > 0 && (
+                    <span className="bg-red-500 text-white rounded-full px-1.5 py-0.5 text-[10px] ml-1">{selectedUsers.length}</span>
+                  )}
+                </button>
+              </div>
+              <button
+                onClick={() => setIsModalOpen(true)}
+                className="flex items-center text-xs font-bold text-slate-700 bg-white border border-slate-300 rounded shadow-sm px-3 py-[7px] hover:bg-slate-50 transition-all cursor-pointer"
+              >
+                <svg className="w-3.5 h-3.5 mr-1.5 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" /></svg>
+                <span>사용자 추가</span>
+              </button>
+            </div>
+          </div>
+
+          {/* 하단 데이터 테이블 박스 */}
+          {/* 하단 데이터 테이블 박스 */}
+          <div className="bg-white rounded-lg shadow-sm border border-slate-200 flex flex-col flex-1 overflow-hidden z-20">
+            <div className="p-0 overflow-auto flex-1 h-[600px] custom-scrollbar">
+              <table className="w-full text-left whitespace-nowrap">
+                <thead className="bg-slate-50/70 border-b border-gray-200 text-xs text-slate-500 font-bold sticky top-0 z-10">
+                  <tr>
+                    <th className="p-4 pl-6 w-10 text-center">
+                      <input
+                        type="checkbox"
+                        checked={isAllSelected}
+                        onChange={toggleAll}
+                        className="w-4 h-4 accent-letusBlue cursor-pointer"
+                        title="전체 선택"
+                      />
+                    </th>
+                    <th className="p-4 w-10 text-center">No</th>
+                    <th className="p-4">사용자명</th>
+                    <th className="p-4">사용자 ID</th>
+                    <th className="p-4">소속 팀</th>
+                    <th className="p-4">소속 브랜드</th>
+                    <th className="p-4">담당 업체/창고</th>
+                    <th className="p-4">권한 그룹</th>
+                    <th className="p-4 text-center">가입일시</th>
+                    <th className="p-4 text-center">상태</th>
+                  </tr>
+                </thead>
+                {isLoading ? (
+                  <TableSkeleton rowCount={8} colCount={9} />
+                ) : users.length === 0 ? (
+                  <tbody>
+                    <tr>
+                      <td colSpan="10" className="p-10 text-center text-gray-400">
+                        <svg className="w-16 h-16 mx-auto mb-4 text-gray-200" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" /></svg>
+                        <p className="font-semibold text-gray-500 mb-1">등록된 사용자가 없습니다.</p>
+                        <p className="text-sm">상단의 [사용자 추가] 버튼을 눌러 첫 계정을 생성하세요.</p>
+                      </td>
+                    </tr>
+                  </tbody>
+                ) : (
+                  <tbody className="divide-y divide-gray-100 text-[13px] text-gray-700">
+                    {users.map((user, idx) => (
+                      <tr key={user.id}
+                        className={`transition-colors cursor-pointer ${selectedUsers.includes(user.id) ? 'bg-blue-50' : 'hover:bg-blue-50/30'}`}
+                        onDoubleClick={() => setEditTarget(user)}
+                        title="더블클릭하면 정보를 수정할 수 있습니다"
+                      >
+                        <td className="p-4 pl-6 text-center">
+                          <input
+                            type="checkbox"
+                            checked={selectedUsers.includes(user.id)}
+                            onChange={() => toggleOne(user.id)}
+                            className="w-4 h-4 accent-letusBlue cursor-pointer"
+                          />
+                        </td>
+                        <td className="p-4 text-center text-gray-400 font-medium">{idx + 1}</td>
+                        <td className="p-4 font-black text-gray-800 text-sm tracking-tight">{user.name}</td>
+                        <td className="p-4 font-bold text-gray-600">{user.login_id}</td>
+                        <td className="p-4 text-gray-600 font-medium">{user.team || '-'}</td>
+                        <td className="p-4">
+                          <div className="flex gap-1.5 flex-wrap max-w-[200px]">
+                            {user.brands
+                              ? <span className="bg-slate-50 text-slate-600 border border-slate-200 px-2 py-1 rounded-[4px] text-[11px] whitespace-nowrap font-bold shadow-sm">{user.brands}</span>
+                              : <span className="text-gray-400">-</span>
+                            }
+                          </div>
+                        </td>
+                        <td className="p-4">
+                          {(user.managed_vendors || user.managed_brands) ? (
+                            <button
+                              onClick={e => { e.stopPropagation(); setVendorListTarget(user); }}
+                              className="inline-flex items-center gap-1 bg-blue-50 text-letusBlue border border-blue-200 rounded-[4px] px-2 py-1 text-[10px] font-bold hover:bg-blue-100 transition-colors whitespace-nowrap"
+                            >
+                              <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 9l-7 7-7-7" /></svg>
+                              상세보기 ({(typeof user.managed_vendors === 'string' ? user.managed_vendors.split(',').filter(Boolean).length : 0) + (typeof user.managed_brands === 'string' ? user.managed_brands.split(',').filter(Boolean).length : 0)})
+                            </button>
+                          ) : (
+                            <span className="text-gray-400 text-xs">-</span>
+                          )}
+                        </td>
+                        <td className="p-4">
+                          <span className={`px-2.5 py-1 rounded-[4px] font-bold text-[11px] ${user.role === '관리자' ? 'bg-orange-50 text-orange-600 border border-orange-100' : 'bg-slate-100 text-slate-600'}`}>
+                            {user.role}
+                          </span>
+                        </td>
+                        <td className="p-4 text-center text-gray-400 font-bold">{formatDateTime(user.created_at)}</td>
+                        <td className="p-4 text-center">
+                          <span className={`px-3 py-1 rounded-full font-bold text-[11px] shadow-sm ${user.status === '정상' || user.status === '정상 승인' ? 'bg-green-100 text-green-700 border border-green-200' : 'bg-red-50 text-red-600 border border-red-200'}`}>
+                            {user.status}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                )}
+              </table>
+            </div>
+          </div>
+          {isModalOpen && <UserAddModal onClose={() => setIsModalOpen(false)} onReload={fetchUsers} />}
+          {editTarget && <UserEditModal user={editTarget} onClose={() => setEditTarget(null)} onReload={fetchUsers} />}
+          {vendorListTarget && <VendorListModal user={vendorListTarget} onClose={() => setVendorListTarget(null)} />}
+        </div>
+      );
+    };
+
+    // --- 사이드바 (Sidebar) ---
+    const Sidebar = ({ page, setPage }) => {
+      const isSubmenuActive = page === 'list' || page === 'registration';
+
+      return (
+        <div className="w-64 bg-letusSidebar text-white flex flex-col h-full flex-shrink-0">
+          <div className="p-5 border-b border-gray-700/50">
+            <h1 className="text-2xl cursor-pointer" onClick={() => setPage('dashboard')}>
+              <span className="font-extrabold tracking-tight">LETUS</span>
+              <span className="font-extrabold text-letusOrange tracking-tight ml-1">LOGIS</span>
+            </h1>
+          </div>
+
+          <div className="flex text-sm font-semibold border-b border-gray-700/50">
+            <div className="flex-1 text-center py-3 border-b-2 border-letusBlue cursor-pointer">전체메뉴</div>
+            <div className="flex-1 text-center py-3 text-gray-400 cursor-pointer hover:text-gray-200">즐겨찾기</div>
+          </div>
+
+          <div className="p-4">
+            <div className="relative">
+              <svg className="w-4 h-4 absolute left-3 top-3 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+              <input type="text" placeholder="검색" className="w-full bg-white text-gray-800 rounded-sm pl-9 pr-3 py-2 text-sm focus:outline-none" />
+            </div>
+          </div>
+
+          <nav className="flex-1 px-2 py-2 space-y-2 mt-4">
+
+            {/* 마스터 정보관리 */}
+            <div>
+              <div className="bg-transparent px-4 py-2 text-sm font-semibold flex items-center text-gray-300 transition-colors">
+                <svg className="w-4 h-4 mr-3 opacity-90" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                마스터 정보관리
+              </div>
+              <div className="mt-1 space-y-1">
+                <div
+                  className={`pl-11 pr-4 py-2 cursor-pointer text-sm font-medium transition-colors rounded-sm ${page === 'user_management' ? 'bg-letusBlue text-white shadow-sm' : 'text-gray-400 hover:text-white hover:bg-gray-800'}`}
+                  onClick={() => setPage('user_management')}
+                >
+                  사용자 관리
+                </div>
+              </div>
+            </div>
+
+            {/* 입고 특이사항 */}
+            <div className="mt-4">
+              <div
+                className="bg-transparent px-4 py-2 cursor-pointer text-sm font-semibold flex items-center text-gray-300 hover:text-white transition-colors"
+                onClick={() => setPage('dashboard')}
+              >
+                <svg className="w-4 h-4 mr-3 opacity-90" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 10h16M4 14h16M4 18h16" /></svg>
+                입고 특이사항
+              </div>
+              <div className="mt-1 space-y-1">
+                <div
+                  className={`pl-11 pr-4 py-2 cursor-pointer text-sm font-medium transition-colors rounded-sm ${page === 'list' ? 'bg-letusBlue text-white shadow-sm' : 'text-gray-400 hover:text-white hover:bg-gray-800'}`}
+                  onClick={() => setPage('list')}
+                >
+                  입고 특이사항 LIST
+                </div>
+              </div>
+            </div>
+          </nav>
+
+          <div className="p-4 text-xs text-gray-500 font-medium">
+            <a href="#" className="hover:text-gray-300 underline mb-2 block object-cover">개인정보처리방침</a>
+            <p>© 2026 레터스(LETUS)<br />All rights reserved.</p>
+          </div>
+        </div>
+      );
+    };
+
+    // --- 헤더 (Header) ---
+    const Header = ({ page, userProfile, onLogout, notifications = [], isNotiOpen, toggleNoti, onNotiClick }) => (
+      <header className="h-16 min-h-[64px] flex-shrink-0 bg-gradient-to-r from-blue-50/70 to-white border-b border-gray-200 flex justify-between items-center px-6 sticky top-0 z-50">
+        <div className="flex items-center text-gray-600">
+          <svg className="w-5 h-5 text-gray-400 mr-2" fill="currentColor" viewBox="0 0 20 20"><path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" /></svg>
+          <h2 className="text-lg font-bold text-gray-800 tracking-tight">
+            {page === 'dashboard' ? '대시보드' : page === 'user_management' ? '사용자 관리' : '입고 특이사항'}
+            <span className="text-sm font-normal text-gray-400 ml-1">
+              {page === 'dashboard' ? '대시보드' : page === 'user_management' ? '마스터 정보' : '입고 특이사항 LIST'}
+            </span>
+          </h2>
+        </div>
+        <div className="flex items-center">
+          <button className="text-gray-400 hover:text-gray-700 transition-colors mr-3" onClick={(e) => {
+            const svg = e.currentTarget.querySelector('svg');
+            svg.classList.add('animate-spin');
+            setTimeout(() => svg.classList.remove('animate-spin'), 500);
+            window.dispatchEvent(new Event('trigger-refresh'));
+          }}>
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+          </button>
+
+          <div className="relative">
+            <button onClick={toggleNoti} className={`text-gray-400 hover:text-gray-700 transition-colors mr-6 relative p-1.5 rounded-full ${isNotiOpen ? 'bg-gray-200 text-gray-800' : ''}`}>
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" /></svg>
+              {notifications.filter(n => !n.read).length > 0 && (
+                <span className="absolute top-0.5 right-1 block h-1.5 w-1.5 rounded-full bg-red-500 ring-2 ring-white"></span>
+              )}
+            </button>
+
+            {/* 알림 팝업 드롭다운 */}
+            {isNotiOpen && (
+              <div className="absolute right-6 top-10 w-[320px] bg-white border border-gray-200 rounded-lg shadow-xl z-50 overflow-hidden flex flex-col slide-up">
+                <div className="max-h-[350px] overflow-y-auto divide-y divide-gray-100 custom-scrollbar">
+                  {notifications.length === 0 ? (
+                    <div className="py-12 text-center text-xs text-gray-400 font-bold">최근 도착한 알림이 없습니다.</div>
+                  ) : (
+                    notifications.map(noti => (
+                      <div
+                        key={noti.id}
+                        onClick={() => onNotiClick(noti.id, noti.filterObj)}
+                        className={`p-3.5 cursor-pointer transition-all hover:bg-slate-50 ${noti.read ? 'opacity-40 bg-gray-50' : 'bg-white'}`}
+                      >
+                        <div className="flex justify-between items-start mb-1">
+                          <span className={`text-[10px] font-black px-1.5 py-0.5 rounded ${noti.title === '신규 입고' ? 'bg-orange-50 text-orange-600' : 'bg-blue-50 text-blue-600'}`}>{noti.title}</span>
+                          <span className="text-[10px] text-gray-400 font-medium">{noti.date}</span>
+                        </div>
+                        <p className={`text-xs mt-1.5 leading-snug ${noti.read ? 'text-gray-500' : 'text-gray-800 font-bold'}`}>{noti.message}</p>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="text-right">
+            <p className="text-sm font-bold text-gray-800">
+              {userProfile ? userProfile.name : '기다리는 중...'}
+
+            </p>
+            <p className="text-xs text-gray-500">
+              {userProfile ? (
+                <>
+                  {userProfile.brands || 'LETUS'}
+                  {' • '}
+                  {userProfile.role || '사용자'}
+                </>
+              ) : 'LETUS'}
+            </p>
+          </div>
+          <button
+            onClick={onLogout}
+            className="ml-4 pl-4 border-l border-gray-200 text-xs font-bold text-slate-400 hover:text-red-500 transition-colors"
+          >
+            로그아웃
+          </button>
+        </div>
+      </header>
+    );
+
+    // --- 대시보드 메인 컴포넌트 ---
+    const Dashboard = ({ onNavigateToList, onDrillDown, issues = [], isLoading = false, onReload }) => {
+      // 신규 상태: 선택된 브랜드 다중 관리
+      const [selectedBrands, setSelectedBrands] = useState([]);
+
+      const toggleBrand = (brand) => {
+        if (selectedBrands.includes(brand)) {
+          setSelectedBrands(selectedBrands.filter(b => b !== brand));
+        } else {
+          if (selectedBrands.length >= 6) return;
+          setSelectedBrands([...selectedBrands, brand]);
+        }
+      };
+
+      // 1. 브랜드별 특이사항 통계 계산
+      const displayBrands = ['퍼시스', '일룸', '시디즈', '슬로우베드', '알로소', '데스커'];
+      const brandStatsDetails = displayBrands.reduce((acc, brand) => {
+        acc[brand] = { pending: 0, processing: 0, completed: 0 };
+        return acc;
+      }, {});
+
+      issues.forEach(issue => {
+        if (brandStatsDetails[issue.brand]) {
+          if (issue.status === '조치대기') brandStatsDetails[issue.brand].pending += 1;
+          if (issue.status === '처리 중') brandStatsDetails[issue.brand].processing += 1;
+          if (issue.status === '조치완료') brandStatsDetails[issue.brand].completed += 1;
+        }
+      });
+
+      // 2. 실제 데이터(issues) 기반 차트 동적 Aggregate
+      const chartStats = (() => {
+        const base = {};
+        const targetIssues = selectedBrands.length > 0
+          ? issues.filter(issue => selectedBrands.includes(issue.brand))
+          : issues;
+
+        targetIssues.forEach(issue => {
+          const type = issue.issue_type || '기타';
+          base[type] = (base[type] || 0) + 1;
+        });
+
+        if (Object.keys(base).length === 0) return { '등록 0건 (데이터 없음)': 1 };
+        return base;
+      })();
+
+      // 바 차트용 공급사 기준 Aggregate (향후 DB에 vendor 컬럼 추가 시 자동 연동 대기)
+      const supplierStats = (() => {
+        const base = {};
+        const targetIssues = selectedBrands.length > 0
+          ? issues.filter(issue => selectedBrands.includes(issue.brand))
+          : issues;
+
+        targetIssues.forEach(issue => {
+          // TODO: 현재는 DB에 vendor 컬럼이 없어 일시적으로 brand를 보여주지만, 나중에 컬럼이 추가되면 issue.vendor 값이 즉시 우선 적용됩니다.
+          const vendor = issue.vendor || issue.brand || '미상';
+          base[vendor] = (base[vendor] || 0) + 1;
+        });
+
+        if (Object.keys(base).length === 0) return { '등록 0건': 1 };
+        return base;
+      })();
+
+      const totalIssues = Object.values(chartStats).reduce((a, b) => a + b, 0);
+
+      // Recharts용 파이 데이터 매핑
+      const pieData = Object.entries(chartStats)
+        .filter(([k, v]) => v > 0)
+        .map(([k, v]) => ({ name: k, value: v }));
+
+      const maxSupplierTotal = Math.max(...Object.values(supplierStats));
+      const currentTime = "03-21 08:50 기준";
+
+      return (
+        <div className="p-6 space-y-6 slide-up">
+
+          {/* --- 신규: 브랜드별 특이사항 처리 현황 섹션 --- */}
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 hover:shadow-md transition-shadow shrink-0">
+            <div className="mb-6">
+              <h3 className="text-lg font-bold text-gray-900 font-sans">브랜드별 특이사항 처리 현황</h3>
+              <p className="text-xs text-gray-400 font-medium mt-1">{currentTime}</p>
+            </div>
+
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+              {displayBrands.map(brand => {
+                const stats = brandStatsDetails[brand];
+                const isSelected = selectedBrands.includes(brand);
+                return (
+                  <div
+                    key={brand}
+                    onClick={() => toggleBrand(brand)}
+                    className={`rounded-xl px-5 py-4 flex items-center border text-sm cursor-pointer transition-all ${isSelected
+                      ? 'bg-orange-50 border-orange-400 shadow-sm ring-1 ring-orange-400/50'
+                      : 'bg-gray-50/60 border-gray-100 hover:border-gray-200 hover:bg-gray-100'
+                      }`}
+                  >
+                    {/* 브랜드명: 31% */}
+                    <div style={{ width: '31%' }} className={`font-bold tracking-tight whitespace-nowrap truncate pr-2 ${isSelected ? 'text-orange-700' : 'text-gray-800'}`}>
+                      {brand}
+                    </div>
+
+                    {/* 나머지 지표들 컨테이너: 69% */}
+                    <div className="flex items-center flex-1">
+                      <div style={{ width: '33.33%' }} className="flex justify-between items-center pr-3 sm:pr-4 border-r border-gray-200">
+                        <span className="text-gray-400 font-medium whitespace-nowrap text-xs sm:text-sm">조치대기</span>
+                        <span className="text-red-500 font-bold text-base sm:text-lg cursor-pointer hover:underline" onClick={(e) => { e.stopPropagation(); onDrillDown({ brand, status: '조치대기' }); }}>{stats.pending}</span>
+                      </div>
+
+                      <div style={{ width: '33.33%' }} className="flex justify-between items-center px-3 sm:px-4 border-r border-gray-200">
+                        <span className="text-gray-400 font-medium whitespace-nowrap text-xs sm:text-sm">처리 중</span>
+                        <span className="text-yellow-500 font-bold text-base sm:text-lg cursor-pointer hover:underline" onClick={(e) => { e.stopPropagation(); onDrillDown({ brand, status: '처리 중' }); }}>{stats.processing}</span>
+                      </div>
+
+                      <div style={{ width: '33.33%' }} className="flex justify-between items-center pl-3 sm:pl-4">
+                        <span className="text-gray-400 font-medium whitespace-nowrap text-xs sm:text-sm">조치완료</span>
+                        <span className="text-green-500 font-bold text-base sm:text-lg cursor-pointer hover:underline" onClick={(e) => { e.stopPropagation(); onDrillDown({ brand, status: '조치완료' }); }}>{stats.completed}</span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* 상단 2단 차트 영역 */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* 좌측 도넛 차트 */}
+            <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 flex flex-col hover:shadow-md transition-shadow">
+              <div className="mb-6">
+                <h3 className="text-lg font-bold text-gray-900 font-sans">특이사항 유형</h3>
+                <p className="text-xs text-gray-400 font-medium mt-1">{currentTime}</p>
+              </div>
+              <div className="flex-1 flex items-center justify-center gap-8 xl:gap-14 w-full h-[220px] mt-2">
+                <div className="relative w-56 h-56 flex items-center justify-center">
+                  {PieChart ? (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie
+                          data={pieData}
+                          cx="50%"
+                          cy="50%"
+                          innerRadius={65}
+                          outerRadius={95}
+                          paddingAngle={4}
+                          cornerRadius={8}
+                          dataKey="value"
+                          stroke="none"
+                        >
+                          {pieData.map((entry, index) => (
+                            <Cell key={`cell-${index}`} fill={CATEGORY_COLORS[entry.name] || '#aaaaaa'} />
+                          ))}
+                        </Pie>
+                        <Tooltip
+                          contentStyle={{ borderRadius: '8px', border: '1px solid #f3f4f6', boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)', fontSize: '13px' }}
+                          itemStyle={{ color: '#1f2937', fontWeight: 'bold' }}
+                        />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <div className="text-[11px] font-bold text-red-500 bg-red-50 rounded-full w-40 h-40 flex items-center justify-center shadow-inner border border-red-200 text-center leading-relaxed">
+                      Chart Module<br />Loading Failed
+                    </div>
+                  )}
+
+                  {/* 중앙 총 발생건 텍스트 오버레이 */}
+                  <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                    <span className="text-[28px] font-black text-gray-900 leading-tight">{totalIssues}</span>
+                    <span className="text-xs font-semibold text-gray-500">총 발생건</span>
+                  </div>
+                </div>
+                <div className="space-y-3">
+                  {Object.entries(chartStats).map(([k, v]) => (
+                    <div key={k} className="flex justify-between items-center w-32 text-sm">
+                      <div className="flex items-center text-gray-600 font-medium whitespace-nowrap">
+                        <span className="w-2.5 h-2.5 rounded-full mr-3" style={{ backgroundColor: CATEGORY_COLORS[k] || '#d1d5db' }}></span>{k}
+                      </div>
+                      <div className="font-bold text-gray-900">{v}<span className="text-xs text-gray-400 font-normal ml-0.5">건</span></div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* 우측 바 차트 */}
+            <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 flex flex-col hover:shadow-md transition-shadow">
+              <div className="mb-6">
+                <h3 className="text-lg font-bold text-gray-900 font-sans">공급업체별 이슈 비율</h3>
+                <p className="text-xs text-gray-400 font-medium mt-1">{currentTime}</p>
+              </div>
+              <div className="flex-1 flex flex-col justify-center space-y-6 px-4">
+                {Object.entries(supplierStats).map(([vendor, total], idx) => {
+                  const percentWidth = (total / maxSupplierTotal) * 100;
+                  return (
+                    <div key={vendor} className="flex items-center text-sm">
+                      <span className="w-24 text-gray-600 font-semibold truncate text-right mr-4" title={vendor}>{vendor}</span>
+                      <div className="flex-1 h-5 rounded overflow-hidden">
+                        <div className="h-full rounded-r transition-all duration-1000 ease-out" style={{ width: `${percentWidth}%`, backgroundColor: BRAND_COLORS[idx % BRAND_COLORS.length] }}></div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
+          {/* 하단 최근 특이사항 리스트 */}
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 hover:shadow-md transition-shadow">
+            <div className="p-5 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
+              <div className="flex items-center">
+                <svg className="w-5 h-5 text-gray-700 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+                <h3 className="text-lg font-bold text-gray-900">최근 특이사항 발생 내역</h3>
+              </div>
+              <button onClick={onNavigateToList} className="text-sm font-semibold text-letusBlue hover:text-blue-700 transition-colors flex items-center">
+                전체보기 <svg className="w-4 h-4 ml-1" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+              </button>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left whitespace-nowrap">
+                <thead className="bg-white border-b border-gray-200 text-xs font-bold text-gray-500">
+                  <tr>
+                    <th className="p-4 pl-6">입고번호</th>
+                    <th className="p-4">발생시간</th>
+                    <th className="p-4">공급사</th>
+                    <th className="p-4">품목정보</th>
+                    <th className="p-4">특이유형</th>
+                    <th className="p-4 text-center">처리상태</th>
+                    <th className="p-4 text-center">관리</th>
+                  </tr>
+                </thead>
+                {isLoading ? (
+                  <TableSkeleton rowCount={5} colCount={7} />
+                ) : (
+                  <tbody className="divide-y divide-gray-100 text-sm">
+                    {[...issues]
+                      .sort((a, b) => {
+                        if (a.status === '조치대기' && b.status !== '조치대기') return -1;
+                        if (a.status !== '조치대기' && b.status === '조치대기') return 1;
+                        return 0;
+                      })
+                      .slice(0, 6)
+                      .map((row, idx) => (
+                        <tr key={row.reception_no || idx} className="hover:bg-gray-50 transition-colors">
+                          <td className="p-4 pl-6 text-gray-800 font-semibold">{row.reception_no}</td>
+                          <td className="p-4 text-gray-500 font-mono">{row.created_at ? new Date(row.created_at).toLocaleDateString() : '-'}</td>
+                          <td className="p-4 font-semibold text-gray-700">{row.vendor || '-'}</td>
+                          <td className="p-4 text-gray-600 truncate max-w-xs">{row.product_code}</td>
+                          <td className="p-4"><CategoryBadge category={row.issue_type} /></td>
+                          <td className="p-4 text-center"><StatusBadge status={row.status} category={row.issue_type} /></td>
+                          <td className="p-4 text-center">
+                            <button onClick={onNavigateToList} className="border border-gray-300 text-gray-600 bg-white px-3 py-1 rounded text-xs font-semibold hover:bg-gray-50 hover:border-gray-400 transition-colors shadow-sm">
+                              상세보기
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                  </tbody>
+                )}
+              </table>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // --- 전체 이슈 리스트 화면 (이전 작업 유지용) ---
+    const IssueList = ({ issues = [], isLoading = false, onReload, initialFilter, userProfile }) => {
+      const today = new Date().toISOString().split("T")[0];
+      const [viewComment, setViewComment] = useState(null);
+      const [activeModalRow, setActiveModalRow] = useState(null);
+      const [activeHandleRow, setActiveHandleRow] = useState(null);
+      const [selectedIds, setSelectedIds] = useState([]);
+
+      // UI 컨트롤(콤보박스)에 묶여있는 임시 상태 (Draft)
+      const [draftBrand, setDraftBrand] = useState(initialFilter?.brand || '전체');
+      const [draftStatus, setDraftStatus] = useState(initialFilter?.status || '전체');
+      const [draftStartDate, setDraftStartDate] = useState(today);
+      const [draftEndDate, setDraftEndDate] = useState(today);
+      const [draftSearchType, setDraftSearchType] = useState('품목코드');
+      const [draftSearchValue, setDraftSearchValue] = useState('');
+
+      // 조회버튼을 누르거나 드릴다운으로 곧바로 꽂혔을 때 쓰는 실제 검색 상태 (Applied)
+      const [appliedBrand, setAppliedBrand] = useState(initialFilter?.brand || '전체');
+      const [appliedStatus, setAppliedStatus] = useState(initialFilter?.status || '전체');
+      const [isSearching, setIsSearching] = useState(false);
+      const [appliedStartDate, setAppliedStartDate] = useState(today);
+      const [appliedEndDate, setAppliedEndDate] = useState(today);
+      const [appliedSearchType, setAppliedSearchType] = useState('품목코드');
+      const [appliedSearchValue, setAppliedSearchValue] = useState('');
+
+      // 1. 외부(Dashboard 등)에서 initialFilter(드릴다운 파라미터)가 들어왔을 때 변경 즉시 감지 후 렌더링 강제 (useEffect)
+      useEffect(() => {
+        if (initialFilter) {
+          const b = initialFilter.brand || '전체';
+          const s = initialFilter.status || '전체';
+          setDraftBrand(b);
+          setDraftStatus(s);
+          setAppliedBrand(b);
+          setAppliedStatus(s);
+        }
+      }, [initialFilter]);
+
+      // 2. 조회하기 클릭 핸들러
+      const handleSearch = () => {
+        setAppliedBrand(draftBrand);
+        setAppliedStatus(draftStatus);
+        setAppliedStartDate(draftStartDate);
+        setAppliedEndDate(draftEndDate);
+        setAppliedSearchType(draftSearchType);
+        setAppliedSearchValue(draftSearchValue);
+      };
+
+      // 3. 실제 필터링 동작 (issues 객체가 파괴되지 않으며, View 모델만 변형)
+      const filteredIssues = issues.filter(issue => {
+        if (appliedBrand !== '전체' && issue.brand !== appliedBrand) return false;
+        if (appliedStatus !== '전체' && issue.status !== appliedStatus) return false;
+
+        // 날짜 범위 필터
+        if (issue.created_at) {
+          const issueDate = issue.created_at.split('T')[0];
+          if (issueDate < appliedStartDate || issueDate > appliedEndDate) return false;
+        }
+
+        // 검색어 필터 (품목코드, 공급업체, 처리자)
+        if (appliedSearchValue) {
+          const val = appliedSearchValue.toLowerCase();
+          if (appliedSearchType === '품목코드') {
+            if (!issue.product_code?.toLowerCase().includes(val)) return false;
+          } else if (appliedSearchType === '공급업체') {
+            const vendor = (issue.vendor || issue.brand || '').toLowerCase();
+            if (!vendor.includes(val)) return false;
+          } else if (appliedSearchType === '처리자') {
+            if (!issue.handlerName?.toLowerCase().includes(val)) return false;
+          }
+        }
+
+        return true;
+      });
+      // console.log(`IssueList Render - Total: ${issues.length}, Filtered: ${filteredIssues.length}`);
+
+      const isAllSelected = filteredIssues.length > 0 && selectedIds.length === filteredIssues.length;
+
+      const handleSelectAll = (e) => {
+        if (e.target.checked) {
+          // 🔥 안심 기준키! 데이터 무결성을 위해 reception_no 대신 row.id로 매핑합니다.
+          setSelectedIds(filteredIssues.map(issue => issue.id));
+        } else {
+          setSelectedIds([]);
+        }
+      };
+
+      const handleSelectOne = (e, id) => {
+        if (e.target.checked) {
+          setSelectedIds(prev => [...prev, id]);
+        } else {
+          setSelectedIds(prev => prev.filter(item => item !== id));
+        }
+      };
+
+      // 🔥 다중 선택 상태 초기화 (조치대기 롤백)
+      const handleRevertSelectedIssues = async () => {
+        if (selectedIds.length === 0) {
+          alert('원복할 항목을 1개 이상 선택해 주세요.');
+          return;
+        }
+
+        if (userProfile?.role === '사용자') {
+          alert('이 작업은 관리자만 수행할 수 있습니다.');
+          return;
+        }
+
+        if (!window.confirm(`선택하신 ${selectedIds.length}건의 이슈를 '조치대기' 상태로 원복하시겠습니까?\n이전의 조치 내용, 최종 처리자 정보, 해결 일시가 모두 영구적으로 초기화(삭제)됩니다.`)) return;
+
+        try {
+          const { error } = await supabase
+            .from('logistics_issues')
+            .update({
+              status: '조치대기',
+              final_handler: '',
+              action_content: '',
+              resolved_at: null
+            })
+            // 🔥 고유 ID 값으로 매칭!
+            .in('id', selectedIds);
+
+          if (error) throw error;
+
+          alert(`선택한 ${selectedIds.length}건의 항목이 초기화되었습니다.`);
+          setSelectedIds([]); // 체크박스 해제
+          await fetchIssues(); // 데이터 새로고침
+        } catch (err) {
+          console.error('원복 처리 중 오류:', err);
+          alert('원복 처리 중 오류가 발생했습니다.');
+        }
+      };
+
+      const CommentViewerModal = ({ title, content, author, date, onClose }) => {
+        if (!content) return null;
+        return (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+            <div className="fixed inset-0 bg-black/40 backdrop-blur-sm transition-opacity" onClick={onClose}></div>
+            <div className="bg-white rounded-xl shadow-2xl z-10 w-full max-w-sm slide-up border border-gray-100 overflow-hidden">
+              <div className="p-4 border-b border-gray-100 bg-gray-50 flex justify-between items-center">
+                <h3 className="font-bold text-gray-900">{title}</h3>
+                <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition-colors"><CloseIcon /></button>
+              </div>
+              <div className="p-5 bg-white space-y-3">
+                <div className="flex justify-between items-center text-xs text-gray-500 font-medium">
+                  <span>작성자: {author || '-'}</span><span>일시: {date}</span>
+                </div>
+                <div className="bg-gray-50 text-gray-800 p-4 rounded-lg text-sm leading-relaxed border border-gray-100">
+                  {content}
+                </div>
+              </div>
+              <div className="p-3 border-t border-gray-50 bg-gray-50/50 text-right">
+                <button onClick={onClose} className="px-5 py-2 bg-letusSidebar text-white text-sm font-semibold rounded hover:bg-gray-800 transition-colors">닫기</button>
+              </div>
+            </div>
+          </div>
+        )
+      };
+
+      return (
+        <div className="p-6 bg-slate-100 min-h-[calc(100vh-64px)] flex flex-col gap-4 slide-up">
+
+          {/* 상단 검색/필터 박스 (절대 높이 고정: h-[54px]) */}
+          <div className="w-full h-[54px] bg-white rounded-lg shadow-sm border border-slate-200 px-6 flex items-center z-30 shrink-0">
+            <div className="flex items-center gap-6 w-full overflow-hidden">
+              {/* 1. 브랜드 */}
+              <div className="flex items-center shrink-0">
+                <label className="text-[11px] font-bold text-gray-600 mr-2 whitespace-nowrap flex items-center">브랜드 <span className="text-letusOrange ml-0.5">*</span></label>
+                <select
+                  value={draftBrand}
+                  onChange={(e) => setDraftBrand(e.target.value)}
+                  className="border border-gray-200 rounded-[3px] text-xs px-2.5 h-[30px] focus:outline-none focus:border-letusOrange w-28 cursor-pointer text-gray-700"
+                >
+                  <option value="전체">전체</option>
+                  <option value="퍼시스">퍼시스</option>
+                  <option value="일룸">일룸</option>
+                  <option value="슬로우베드">슬로우베드</option>
+                  <option value="데스커">데스커</option>
+                  <option value="시디즈">시디즈</option>
+                  <option value="알로소">알로소</option>
+                </select>
+              </div>
+
+              {/* 2. 등록일자 */}
+              <div className="flex items-center shrink-0">
+                <label className="text-[11px] font-bold text-gray-600 mr-2 whitespace-nowrap flex items-center">등록일자 <span className="text-letusOrange ml-0.5">*</span></label>
+                <div className="flex items-center h-[30px]">
+                  <input type="date" value={draftStartDate} onChange={(e) => setDraftStartDate(e.target.value)} className="border border-gray-200 rounded-[3px] text-xs px-2.5 h-[30px] focus:outline-none focus:border-letusOrange w-[115px] cursor-pointer text-gray-700" />
+                  <span className="mx-1.5 text-gray-400 font-medium text-xs">~</span>
+                  <input type="date" value={draftEndDate} onChange={(e) => setDraftEndDate(e.target.value)} className="border border-gray-200 rounded-[3px] text-xs px-2.5 h-[30px] focus:outline-none focus:border-letusOrange w-[115px] cursor-pointer text-gray-700" />
+                </div>
+              </div>
+
+              {/* 3. 처리상태 */}
+              <div className="flex items-center shrink-0">
+                <label className="text-[11px] font-bold text-gray-600 mr-2 whitespace-nowrap">처리상태</label>
+                <select
+                  value={draftStatus}
+                  onChange={(e) => setDraftStatus(e.target.value)}
+                  className="border border-gray-200 rounded-[3px] text-xs px-2.5 h-[30px] focus:outline-none focus:border-letusOrange w-24 cursor-pointer text-gray-700"
+                >
+                  <option value="전체">전체</option>
+                  <option value="조치대기">조치대기</option>
+                  <option value="처리 중">처리 중</option>
+                  <option value="조치완료">조치완료</option>
+                  <option value="피드백완료">피드백완료</option>
+                </select>
+              </div>
+
+              {/* 4. 검색어 */}
+              <div className="flex items-center shrink-0">
+                <label className="text-[11px] font-bold text-gray-600 mr-2 whitespace-nowrap">검색어</label>
+                <div className="flex gap-1.5 items-center">
+                  <select value={draftSearchType} onChange={(e) => setDraftSearchType(e.target.value)} className="border border-gray-200 rounded-[3px] text-xs px-2.5 h-[30px] focus:outline-none focus:border-letusOrange w-24 cursor-pointer text-gray-700">
+                    <option>품목코드</option>
+                    <option>공급업체</option>
+                    <option>처리자</option>
+                  </select>
+                  <input type="text" value={draftSearchValue} onChange={(e) => setDraftSearchValue(e.target.value)} placeholder="검색어 입력" className="border border-gray-200 rounded-[3px] text-xs px-2.5 h-[30px] focus:outline-none focus:border-letusOrange w-36 text-gray-700" />
+                </div>
+              </div>
+
+              {/* 조회 버튼 (고정 밀착) */}
+              <div className="ml-auto shrink-0 flex items-center pl-4">
+                <button
+                  onClick={handleSearch}
+                  disabled={isSearching}
+                  className="border border-letusOrange text-letusOrange hover:bg-orange-50 font-bold px-6 h-[30px] rounded-[3px] transition-colors text-xs flex items-center justify-center gap-1.5 disabled:opacity-70 disabled:cursor-not-allowed"
+                >
+                  {isSearching ? <svg className="animate-spin h-3.5 w-3.5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> : null}
+                  {isSearching ? '조회 중...' : '조회하기'}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* 중간: 데이터 바깥 외부 툴바 영역 (하얀 박스 외부) */}
+          <div className="flex justify-end w-full px-2 z-30">
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-1.5 border-r border-slate-300 pr-3">
+                <button className="p-1.5 text-green-700 hover:bg-white rounded transition-colors shadow-sm bg-slate-50 border border-slate-200 hover:border-green-300" title="엑셀 다운로드">
+                  <svg className="w-[18px] h-[18px]" fill="currentColor" viewBox="0 0 24 24"><path d="M21.17 3.25q.33 0 .59.25q.24.26.24.59v15.82q0 .33-.24.59q-.26.25-.59.25H2.83q-.33 0-.59-.25q-.24-.26-.24-.59V4.09q0-.33.24-.59q.26-.25.59-.25h18.34zm-8.25 10.9l3.52 4.67h2.7l-4.9-6.07 4.65-5.94h-2.65l-3.23 4.48-3.32-4.48H7.07l4.76 5.94-5 6.07h2.72l3.37-4.67z" /></svg>
+                </button>
+                <button className="p-1.5 text-slate-500 hover:bg-white rounded transition-colors shadow-sm bg-slate-50 border border-slate-200 hover:border-slate-300" title="인쇄">
+                  <svg className="w-[18px] h-[18px]" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" /></svg>
+                </button>
+              </div>
+
+              <div className="relative group">
+                <button className="flex items-center text-xs font-bold text-slate-700 bg-white border border-slate-300 rounded shadow-sm px-3 py-[7px] hover:bg-slate-50 transition-all cursor-pointer justify-between min-w-[100px]">
+                  <span>선택실행</span>
+                  <svg className="w-3.5 h-3.5 ml-2 text-slate-400 transition-transform group-hover:rotate-180" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                </button>
+                <div className="absolute right-0 top-[110%] w-[120px] hidden group-hover:block z-50">
+                  <div className="bg-white border border-slate-200 rounded-md shadow-xl p-1.5 flex flex-col gap-0.5">
+                    <button onClick={handleRevertSelectedIssues} className="w-full text-left px-2.5 py-2 text-slate-600 hover:text-orange-600 hover:bg-orange-50 font-bold rounded text-[11px] transition-colors">원복</button>
+                    <button className="w-full text-left px-2.5 py-2 text-slate-600 hover:text-orange-600 hover:bg-orange-50 font-bold rounded text-[11px] transition-colors">피드백 전송</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* 2. 하단 데이터 테이블 박스 (완벽히 독립된 하얀 박스) */}
+          <div className="bg-white rounded-lg shadow-sm border border-slate-200 flex flex-col flex-1 overflow-hidden z-20">
+
+            {/* 테이블 영역 */}
+            <div className="p-0 overflow-auto flex-1 h-[600px]">
+              <table className="w-full text-left whitespace-nowrap">
+                <thead className="bg-gray-50/50 border-b border-gray-200 text-xs text-gray-500 font-bold sticky top-0 z-10">
+                  <tr>
+                    <th className="p-4 pl-6 w-12">
+                      <input
+                        type="checkbox"
+                        className="w-4 h-4 rounded border-gray-300 text-letusOrange focus:ring-letusOrange cursor-pointer"
+                        checked={isAllSelected}
+                        onChange={handleSelectAll}
+                      />
+                    </th>
+                    <th className="p-4">접수번호</th>
+                    <th className="p-4">소속 브랜드</th>
+                    <th className="p-4">품목코드</th>
+                    <th className="p-4">유형</th>
+                    <th className="p-4">접수자</th>
+                    <th className="p-4">공급업체</th>
+                    <th className="p-4 text-center">처리상태</th>
+                    <th className="p-4 text-center">요청내용</th>
+                    <th className="p-4 text-center">처리 내용</th>
+                    <th className="p-4">최종 처리자</th>
+                    <th className="p-4">최종 처리일시</th>
+                  </tr>
+                </thead>
+                {isLoading ? (
+                  <TableSkeleton rowCount={10} colCount={12} />
+                ) : (
+                  <tbody className="divide-y divide-gray-100 text-sm cursor-pointer">
+                    {filteredIssues.map((row) => {
+                      const rowId = row.id;
+                      return (
+                        <tr
+                          key={rowId}
+                          className={`hover:bg-blue-50/30 transition-colors ${selectedIds.includes(rowId) ? 'bg-blue-50/50' : ''}`}
+                          onClick={() => handleSelectOne({ target: { checked: !selectedIds.includes(rowId) } }, rowId)}
+                        >
+                          <td className="p-4 pl-6 w-12" onClick={(e) => e.stopPropagation()}>
+                            <input
+                              type="checkbox"
+                              className="w-4 h-4 rounded border-gray-300 text-letusOrange focus:ring-letusOrange cursor-pointer"
+                              checked={selectedIds.includes(rowId)}
+                              onChange={(e) => handleSelectOne(e, rowId)}
+                            />
+                          </td>
+                          <td className="p-4 font-bold text-gray-800">{row.reception_no}</td>
+                          <td className="p-4 font-semibold text-gray-700">{row.brand}</td>
+                          <td className="p-4 text-gray-600 truncate max-w-[150px]" title={row.product_code}>{row.product_code}</td>
+                          <td className="p-4"><CategoryBadge category={row.issue_type} /></td>
+                          <td className="p-4 text-gray-600">{row.reporter || '물류담당자'}</td>
+                          <td className="p-4 text-gray-700 font-semibold">{row.vendor || '-'}</td>
+                          <td className="p-4 text-center"><StatusBadge status={row.status} category={row.issue_type} /></td>
+                          <td className="p-4 text-center">
+                            {row.status === '조치대기' ? (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); setActiveModalRow(row); }}
+                                disabled={userProfile?.role === '사용자'}
+                                className={`text-xs font-bold border border-dashed px-3 py-1.5 rounded transition-colors shadow-sm w-[76px] ${userProfile?.role === '사용자'
+                                  ? 'text-gray-400 border-gray-200 bg-gray-50 cursor-not-allowed opacity-60'
+                                  : 'text-gray-500 border-gray-300 bg-gray-50 hover:bg-gray-100/70'
+                                  }`}
+                              >
+                                요청등록
+                              </button>
+                            ) : (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); setActiveModalRow(row); }}
+                                disabled={userProfile?.role === '사용자'}
+                                className={`text-xs font-bold border px-3 py-1.5 rounded transition-colors shadow-sm w-[76px] ${userProfile?.role === '사용자'
+                                  ? 'text-gray-400 border-gray-200 bg-gray-50 cursor-not-allowed opacity-60'
+                                  : 'text-letusBlue border-blue-200 bg-white hover:bg-blue-50'
+                                  }`}
+                              >
+                                요청확인
+                              </button>
+                            )}
+                          </td>
+                          <td className="p-4 text-center text-green-600">
+                            {['처리 중', '조치완료'].includes(row.status) ? (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); setActiveHandleRow(row); }}
+                                className={`text-xs font-bold border px-3 py-1.5 rounded transition-colors shadow-sm w-[76px] ${row.status === '조치완료'
+                                    ? 'text-green-600 border-green-200 bg-white hover:bg-green-50'
+                                    : 'text-yellow-600 border-yellow-300 bg-yellow-50 hover:bg-yellow-100'
+                                  }`}
+                              >
+                                {row.status === '조치완료' ? '조치 확인' : '조치 등록'}
+                              </button>
+                            ) : (
+                              <span className="text-gray-300">-</span>
+                            )}
+                          </td>
+                          <td className="p-4 text-gray-600 font-medium">{row.final_handler || row.handlerName || '-'}</td>
+                          <td className="p-4 text-gray-500 font-mono text-xs">{formatDateTime(row.resolved_at)}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                )}
+              </table>
+            </div>
+          </div>
+          {viewComment && <CommentViewerModal {...viewComment} onClose={() => setViewComment(null)} />}
+          {activeModalRow && <RequestModal row={activeModalRow} onClose={() => setActiveModalRow(null)} onReload={onReload} userProfile={userProfile} />}
+          {activeHandleRow && <HandleModal row={activeHandleRow} onClose={() => setActiveHandleRow(null)} onReload={onReload} userProfile={userProfile} />}
+        </div>
+      );
+    }
+
+    // (사용자 요청에 따라 RegistrationList 및 메뉴 분리 롤백됨)
+
+    // --- 최상위 앱 구조 및 Supabase 초기화 ---
+    const supabaseUrl = 'https://kbbkodmighrrgwtwrgdp.supabase.co';
+    const supabaseAnonKey = 'sb_publishable_2yOkLjobrM_oMlncJFqL3A_gbuU9eAr';
+    const SUPABASE_SERVICE_ROLE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtiYmtvZG1pZ2hycmd3dHdyZ2RwIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NDA2Nzk1OSwiZXhwIjoyMDg5NjQzOTU5fQ.p32oIw0vCr9DfwZ2ifnAjZDM0tiU23UbMgRtXFQ4aeU";
+
+    // 일반 접속용 클라이언트
+    const supabase = window.supabase.createClient(supabaseUrl, supabaseAnonKey);
+    // 권한 시스템 제어용 어드민 클라이언트 (회원 추가 시 세션 탈취 방지)
+    const adminSupabase = window.supabase.createClient(supabaseUrl, SUPABASE_SERVICE_ROLE_KEY);
+
+    // --- 심플 로그인 뷰 ---
+    const LoginView = () => {
+      const [loginId, setLoginId] = useState('');
+      const [password, setPassword] = useState('');
+      const [errorMsg, setErrorMsg] = useState('');
+      const [loading, setLoading] = useState(false);
+
+      const handleLogin = async (e) => {
+        e.preventDefault();
+        setErrorMsg('');
+        if (!loginId || !password) {
+          setErrorMsg('아이디와 비밀번호를 입력해주세요.');
+          return;
+        }
+
+        setLoading(true);
+        // 트릭: 아이디 평문 입력 텍스트에 도메인을 강제 합성 (내부 SaaS 패턴)
+        const targetEmail = loginId.includes('@') ? loginId : `${loginId}@letus.com`;
+
+        console.log("Supabase로 전송하는 최종 이메일:", targetEmail);
+        const { error } = await supabase.auth.signInWithPassword({
+          email: targetEmail,
+          password: password,
+        });
+
+        if (error) {
+          console.error("Supabase Login Error:", error.message);
+          setErrorMsg(`[Dev] 로그인 실패: ${error.message}`);
+        }
+        setLoading(false);
+      };
+
+      return (
+        <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4 slide-up">
+          <div className="max-w-[400px] w-full bg-white rounded-xl shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-slate-100 p-8 sm:p-10 relative overflow-hidden">
+            {/* 상단 파란색 그라데이션 라인 악센트 */}
+            <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-blue-400 to-blue-600"></div>
+
+            <div className="text-center mb-10 pt-2">
+              <h1 className="text-3xl font-black text-letusBlue tracking-tighter mb-2">LETUS LOGIS</h1>
+              <p className="text-sm text-slate-500 font-medium tracking-tight">통합 물류 관리 시스템</p>
+            </div>
+
+            <form onSubmit={handleLogin} className="space-y-5">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5 ml-1">아이디 (ID)</label>
+                <input
+                  type="text"
+                  value={loginId}
+                  onChange={(e) => setLoginId(e.target.value)}
+                  className="w-full border border-slate-200 rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-letusBlue focus:ring-1 focus:ring-letusBlue transition-all text-gray-800 bg-slate-50 focus:bg-white"
+                  placeholder="admin"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5 ml-1">비밀번호</label>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="w-full border border-slate-200 rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-letusBlue focus:ring-1 focus:ring-letusBlue transition-all text-gray-800 bg-slate-50 focus:bg-white"
+                  placeholder="••••••••"
+                />
+              </div>
+
+              {errorMsg && (
+                <div className="text-red-500 text-xs font-bold text-center bg-red-50 py-2.5 rounded-lg border border-red-100 flex items-center justify-center gap-1.5">
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                  {errorMsg}
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full bg-letusBlue hover:bg-blue-600 active:bg-blue-700 text-white font-bold py-3.5 px-4 rounded-lg transition-colors mt-2 flex items-center justify-center shadow-md disabled:opacity-70 disabled:cursor-not-allowed"
+              >
+                {loading ? (
+                  <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w0.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                ) : null}
+                {loading ? '로그인 처리 중...' : '로그인'}
+              </button>
+            </form>
+
+            <div className="mt-10 pt-6 border-t border-slate-100 text-center text-[11px] text-slate-400 font-medium">
+              <p>© 2026 LETUS. All rights reserved.</p>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    const App = () => {
+      const [session, setSession] = useState(null);
+      const [authLoading, setAuthLoading] = useState(true);
+      const [currentPage, setCurrentPage] = useState('dashboard');
+      const [issues, setIssues] = useState([]);
+      const [isLoading, setIsLoading] = useState(true);
+      const [listFilter, setListFilter] = useState(null);
+      const [userProfile, setUserProfile] = useState(null);
+
+      // --- 알림센터 전용 상태 및 로직 ---
+      const [notifications, setNotifications] = useState([]);
+      const [isNotiOpen, setIsNotiOpen] = useState(false);
+
+      // 페이지 로드 시 로컬 스토리지에서 알림 불러오기 (24시간 지난 읽은 알림은 폐기)
+      useEffect(() => {
+        if (session) {
+          const savedKey = 'letus_noti_' + session.user.id;
+          const saved = localStorage.getItem(savedKey);
+          if (saved) {
+            try {
+              const parsed = JSON.parse(saved);
+              const now = new Date().getTime();
+              const validNotis = parsed.filter(n => !(n.read && n.read_at && (now - n.read_at > 24 * 60 * 60 * 1000)));
+              setNotifications(validNotis);
+            } catch (e) { }
+          }
+        }
+      }, [session]);
+
+      // 알림 상태가 바뀔 때마다 스토리지에 자동 저장
+      useEffect(() => {
+        if (session) {
+          localStorage.setItem('letus_noti_' + session.user.id, JSON.stringify(notifications));
+        }
+      }, [notifications, session]);
+
+      // 알림 클릭 시: 읽음 처리 -> 필터 적용해서 리스트로 이동 -> 팝업 닫기
+      const handleNotiClick = (notiId, filterObj) => {
+        setNotifications(prev => prev.map(n => n.id === notiId ? { ...n, read: true, read_at: new Date().getTime() } : n));
+        handleDrillDown(filterObj);
+        setIsNotiOpen(false);
+      };
+
+      const handleLogout = async () => {
+        await supabase.auth.signOut();
+        setUserProfile(null);
+        setSession(null);
+      };
+
+      const handleDrillDown = (filterObj) => {
+        setListFilter(filterObj);
+        setCurrentPage('list');
+      };
+
+      const fetchIssues = async () => {
+        console.log("fetchIssues called.");
+        setIsLoading(true);
+        try {
+          console.log("Requesting data from Supabase logistics_issues...");
+          const { data, error } = await supabase
+            .from('logistics_issues')
+            .select('*')
+            // .gte('created_at', d7Date.toISOString()) // D-7 필터 대기
+            .order('id', { ascending: false });
+
+          if (error) {
+            console.error("Supabase Error Object:", error);
+            throw error;
+          }
+
+          console.log("fetched data success. count:", data ? data.length : 0);
+          setIssues(data || []);
+        } catch (error) {
+          console.error('Supabase fetch exception:', error.message || error);
+          setIssues([]);
+        } finally {
+          setIsLoading(false);
+        }
+      };
+
+      // 1) Auth 세션 감지 로직 (최초 실행 및 상태 구독)
+      useEffect(() => {
+        supabase.auth.getSession().then(({ data: { session } }) => {
+          setSession(session);
+          setAuthLoading(false);
+        });
+
+        const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+          setSession(session);
+          setAuthLoading(false);
+        });
+
+        return () => subscription.unsubscribe();
+      }, []);
+
+      // 2) 로그인이 확인되었을 때만 표 데이터를 불러오고, profiles에서 로그인 사용자 정보도 가져옴
+      useEffect(() => {
+        if (session) {
+          fetchIssues();
+          // 로그인한 사용자의 UUID로 profiles 테이블에서 프로필 조회
+          supabase.from('profiles').select('name, brands, role, managed_brands, managed_vendors').eq('id', session.user.id).single()
+            .then(({ data }) => {
+              if (data) setUserProfile(data);
+            });
+        }
+      }, [session]);
+
+      // [신규] 브라우저 알림 및 실시간 구독 로직
+      useEffect(() => {
+        if (!session || !userProfile) return;
+
+        if (Notification.permission === 'default' && !sessionStorage.getItem('notiAsked')) {
+          sessionStorage.setItem('notiAsked', 'true');
+          Notification.requestPermission();
+        }
+
+        const channel = supabase
+          .channel('logistics_issue_notifications')
+          .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'logistics_issues' }, (payload) => { handleIssueChange(payload.new, '신규 입고'); })
+          .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'logistics_issues' }, (payload) => { handleIssueChange(payload.new, '상태 변경'); })
+          .subscribe();
+
+        const handleIssueChange = (newData, type) => {
+          const userBrands = userProfile?.managed_brands ? userProfile.managed_brands.split(',').map(s => s.trim()) : [];
+          const userVendors = userProfile?.managed_vendors ? userProfile.managed_vendors.split(',').map(s => s.trim()) : [];
+
+          let shouldAlert = false;
+          let message = '';
+          const currentStatus = newData.status || '조치대기';
+
+          console.log("🚨 [DB 실시간 신호 도착!] 상태:", currentStatus);
+          console.log("👤 [내 권한]:", userProfile?.role, " / 🏢 [내 업체]:", userVendors, " / 수신 업체:", newData.vendor);
+
+          // (1) 신규 인입 (조치대기) -> 관리자에게
+          if (currentStatus === '조치대기' && userProfile?.role?.includes('관리자') && (userBrands.includes('전체') || userBrands.includes(newData.brand))) {
+            shouldAlert = true;
+            message = `[신규] ${newData.brand} 브랜드의 새로운 이슈가 접수되었습니다. (${newData.reception_no})`;
+          }
+          // (2) 부서 이관 (처리 중) -> 담당 업체(사용자/관리자 모두)에게
+          else if (currentStatus === '처리 중' && userVendors.includes(newData.vendor)) {
+            shouldAlert = true;
+            message = `[이관] 관리 중인 ${newData.vendor} 업체로 이슈가 이관되었습니다. (${newData.reception_no})`;
+          }
+          // (3) 조치 완료 -> 관리자에게
+          else if (currentStatus === '조치완료' && userProfile?.role?.includes('관리자') && (userBrands.includes('전체') || userBrands.includes(newData.brand))) {
+            shouldAlert = true;
+            message = `[조치완료] ${newData.brand} 브랜드의 이슈 조치가 완료되었습니다. (${newData.reception_no})`;
+          }
+
+          if (shouldAlert) {
+            // 🔥 React StrictMode 이중 구독으로 인한 중복 알림 발생 방지 (2초 내 동일 메세지 무시)
+            const nowTime = new Date().getTime();
+            if (window.lastAlertMsg === message && nowTime - (window.lastAlertTime || 0) < 2000) return;
+            window.lastAlertMsg = message;
+            window.lastAlertTime = nowTime;
+
+            // 알림센터용 객체 생성
+            const newNoti = {
+              id: newData.id + '_' + nowTime,
+              title: type,
+              message: message,
+              date: new Date(nowTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+              read: false,
+              read_at: null,
+              filterObj: { brand: newData.brand || '전체', status: newData.status || '전체' }
+            };
+
+            // 최신 알림을 맨 위에 추가하고, 최대 10개까지만 유지
+            setNotifications(prev => [newNoti, ...prev].slice(0, 10));
+
+            // 브라우저가 백그라운드에 있을 때만 윈도우 푸시 알림 발생
+            if (Notification.permission === 'granted') {
+              new Notification(`LETUS LOGIS - ${type}`, {
+                body: message,
+                icon: 'https://cdn-icons-png.flaticon.com/512/3135/3135715.png'
+              });
+            }
+            fetchIssues(); // 표 갱신
+          }
+        };
+
+        return () => { supabase.removeChannel(channel); };
+      }, [session, userProfile]);
+
+
+      // 방어 로직 (로딩 중이거나 세션이 없으면 뷰 차단)
+      if (authLoading) {
+        return (
+          <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center">
+            <svg className="animate-spin h-8 w-8 text-letusBlue mb-4" xmlns="http://www.w0.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+            <span className="text-sm font-bold text-slate-500 tracking-wide">인증 세션을 확인 중입니다...</span>
+          </div>
+        );
+      }
+
+      if (!session) {
+        return <LoginView />;
+      }
+
+      return (
+        <div className="flex h-screen overflow-hidden bg-letusBg text-gray-900 font-sans">
+          {/* 고정 사이드바 */}
+          <Sidebar page={currentPage} setPage={setCurrentPage} />
+
+          {/* 우측 메인 영역 (스크롤 처리 통합) */}
+          <div className="flex-1 flex flex-col h-full overflow-y-auto w-full relative">
+            <Header page={currentPage} userProfile={userProfile} onLogout={handleLogout} notifications={notifications} isNotiOpen={isNotiOpen} toggleNoti={() => setIsNotiOpen(!isNotiOpen)} onNotiClick={handleNotiClick} />
+            <main>
+              {currentPage === 'dashboard' && <Dashboard onNavigateToList={() => setCurrentPage('list')} onDrillDown={handleDrillDown} issues={issues} isLoading={isLoading} onReload={fetchIssues} />}
+              {currentPage === 'list' && <IssueList userProfile={userProfile} issues={issues} isLoading={isLoading} onReload={fetchIssues} initialFilter={listFilter} />}
+              {currentPage === 'user_management' && <UserManagement />}
+            </main>
+          </div>
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+
+</html>
