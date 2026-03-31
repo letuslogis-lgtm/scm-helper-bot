@@ -126,18 +126,27 @@ async def process_issue_background(user_id, issue_category, callback_url):
         user_text = issue_category  
         prompt_1 = f"""
         당신은 최고 수준의 물류 SCM 라벨 판독기입니다. 작업자의 메시지('{user_text}')와 첨부된 여러 장의 사진을 분석하여 오직 JSON 형식으로만 응답하세요.
-        여러 장의 사진 중 바코드가 가장 명확하게 보이는 사진을 찾아 아래 규칙대로 판독하세요.
+        제공된 사진들 중 바코드가 명확히 보이는 사진을 찾아 아래 규칙대로 판독하세요.
 
         [핵심 추출 규칙]
         1. 사진의 바코드 주변에서 '품목코드'와 '색상코드'를 찾아 반드시 중간에 하이픈(-)을 넣어 "품목코드-색상코드" 형태로 결합하세요.
-        2. 🚨예외 규칙: 만약 품목코드 자체에 이미 하이픈(-)과 색상코드가 결합되어 있다면 별도로 적힌 색상코드는 무시하세요.
+        2. 🚨예외 규칙: 만약 품목코드 자체에 이미 하이픈(-)과 색상코드가 결합되어 있다면 별도로 적힌 색상코드는 무시하고 그 완성된 문자열 자체를 정답으로 사용하세요.
 
-        [절대 무시 규칙] 괄호 기호 안의 내용, 생산일자, 벤더 영문 코드, 로트 번호 등 무시.
-        [판독 족보] 입력: "HSOC1140DTRA 2026-03-16 F", 옆에 "WW" -> 💡정답: {{"product_code": "HSOC1140DTRA-WW"}}
+        [절대 무시(제외) 규칙]
+        - 괄호 기호 `()` 및 괄호 안의 모든 내용 무시 
+        - 생산일자 무시 
+        - 벤더/공급업체 영문 코드 무시 
+        - 로트(LOT) 번호 무시 
+        - 제품 시리즈명, 무게, 수출명 무시 
+
+        [🎯 판독 족보 (이 패턴을 완벽하게 모방하세요!)]
+        - 입력: "HSOC1140DTRA 2026-03-16 F", 옆에 "WW" -> 💡정답: {{"product_code": "HSOC1140DTRA-WW"}}
+        - 입력: "HSOD0214XN(F26303)", 옆에 "PW" -> 💡정답: {{"product_code": "HSOD0214XN-PW"}}
 
         오직 아래 JSON 형식으로만 응답하세요:
         {{"product_code": "추출된코드"}}
         """
+        
         ai_contents = [prompt_1] + imgs_for_ai
         ai_response = await asyncio.to_thread(model.generate_content, ai_contents)
         match = re.search(r'\{.*?\}', ai_response.text.strip(), re.DOTALL)
