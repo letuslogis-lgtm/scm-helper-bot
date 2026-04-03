@@ -77,19 +77,34 @@ def check_code_in_supabase(full_code):
         return len(res.data) > 0
     except Exception: return False
 
+# ==========================================
+# 🔍 [수파베이스 DB 함수] 1순위: vendor / 2순위: production_line
+# ==========================================
 def get_info_from_supabase(code):
     if code == "확인불가": return {"brand": "미확인", "vendor": "미확인"}
     parts = code.split('-')
     try:
+        # DB에서 해당 품번 정보 전체 가져오기
         if len(parts) > 1:
-            res = supabase.table('products').select('brand_category, vendor').eq('item_code', '-'.join(parts[:-1])).eq('item_color', parts[-1]).execute()
+            res = supabase.table('products').select('*').eq('item_code', '-'.join(parts[:-1])).eq('item_color', parts[-1]).execute()
         else:
-            res = supabase.table('products').select('brand_category, vendor').eq('item_code', code).execute()
+            res = supabase.table('products').select('*').eq('item_code', code).execute()
+            
         if res.data:
             row = res.data[0]
-            return {"brand": row.get('brand_category') or "미확인", "vendor": row.get('vendor') or "미확인"}
+            # 브랜드 정보 추출
+            brand = row.get('brand_category') or row.get('brand') or "미확인"
+            
+            # 🔥 1순위: vendor -> 2순위: production_line -> 3순위: 기타 대체 칼럼명 -> 최종: 미확인
+            # 값이 없거나 빈 문자열("")이면 자동으로 다음 순위로 넘어갑니다.
+            vendor = row.get('vendor') or row.get('production_line') or row.get('supplier') or row.get('공급업체') or "미확인"
+            
+            return {"brand": brand, "vendor": vendor}
+            
         return {"brand": "미확인", "vendor": "미확인"}
-    except Exception: return {"brand": "미확인", "vendor": "미확인"}
+    except Exception as e: 
+        print(f"매칭 엔진 에러: {e}")
+        return {"brand": "미확인", "vendor": "미확인"}
 
 def get_employee_name(user_key):
     try:
