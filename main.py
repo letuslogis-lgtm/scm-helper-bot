@@ -8,6 +8,7 @@ import httpx
 from datetime import datetime
 from PIL import Image, ImageOps
 from fastapi import FastAPI, Request, BackgroundTasks
+from fastapi.middleware.cors import CORSMiddleware
 from google import genai # ✨ 구버전 삭제 및 신버전(google.genai) 패키지 임포트!
 from supabase import create_client, Client
 
@@ -25,6 +26,13 @@ ai_client = genai.Client(api_key=GEMINI_API_KEY)
 AI_MODEL_NAME = 'gemini-2.5-flash' 
 
 app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 user_sessions = {}
 
 # 🛠️ 카카오 응답 템플릿
@@ -298,3 +306,66 @@ async def kakao_webhook(request: Request, background_tasks: BackgroundTasks):
             f"💬 입력하신 내용: [ {utterance} ]\n\n사진 없이 위 텍스트(품번)로만 접수하시겠습니까?",
             TEXT_CONFIRM_REPLIES
         )
+
+# ==========================================
+# 📱 [모바일 PWA] 바코드 AI 분석 엔드포인트
+# ==========================================
+import base64
+
+@app.post("/api/barcode")
+async def analyze_barcode(request: Request):
+    try:
+        body = await request.json()
+        image_b64 = body.get("image")
+        
+        if not image_b64:
+            return {"product_code": None, "message": "이미지가 제공되지 않았습니다."}
+
+        # Base64 → PIL Image 변환
+        img_bytes = base64.b64decode(image_b64)
+        img = Image.open(io.BytesIO(img_bytes))
+        img = ImageOps.exif_transpose(img)
+        img.thumbnail((1600, 1600))
+
+        # 기존 카카오봇과 동일한 Gemini 프롬프트 사용
+        prompt = """당신은 최고 수준의 물류 SCM 라벨 판독기입니다. 첨부된 사진을 분석하여 오직 JSON 형식으로만 응답하세요.
+        바코드가 가장 명확하게 보이는 부분을 찾아 아래 규칙대로 판독하세요.
+
+        [핵심 추출 규칙]
+        1. 사진의 바코드 주변에서 '품목코드'와 '색상코드'를 찾아 반드시 중간에 하이픈(-)을 넣어 "품목코드-색상코드" 형태로 결합하세요.
+        2. 🚨예외 규칙: 만약 품목코드 자체에 이미 하이픈(-)과 색상코드가 결합되어 있다면 별도로 적힌 색상코드는 무시하세요.
+
+        [절대 무시 규칙] 괄호 기호 안의 내용, 생산일자, 벤더 영문 코드, 로트 번호 등 무시.
+
+        오직 아래 JSON 형식으로만 응답하세요:
+        {"product_code": "추출된코드"}
+        """
+
+        ai_response = await asyncio.to_thread(
+            ai_client.models.generate_content,
+            model=AI_MODEL_NAME,
+            contents=[prompt, img]
+        )
+
+        match = re.search(r'\{.*?\}', ai_response.text.strip(), re.DOTALL)
+        p_code = json.loads(match.group()).get("product_code", None) if match else None
+
+        if p_code:
+            p_code = str(p_code).strip().upper()
+            # DB 매칭 확인
+            is_valid = check_code_in_supabase(p_code)
+            info = get_info_from_supabase(p_code) if is_valid else {}
+            
+            return {
+                "product_code": p_code,
+                "description": f"브랜드: {info.get('brand', '미확인')} / 공급사: {info.get('vendor', '미확인')}" if is_valid else "DB 미등록 코드",
+                "is_valid": is_valid,
+                "brand": info.get("brand") if is_valid else None,
+                "vendor": info.get("vendor") if is_valid else None,
+            }
+        else:
+            return {"product_code": None, "message": "바코드를 인식하지 못했습니다. 다른 각도에서 다시 촬영해주세요."}
+
+    except Exception as e:
+        print(f"🚨 바코드 분석 에러: {e}")
+        return {"product_code": None, "message": f"분석 중 오류: {str(e)}"}
